@@ -1,0 +1,8 @@
+{
+  "dev": {
+    "run": "cargo run"
+  },
+  "database": "spacetime-rhiwq",
+  "server": "maincloud",
+  "module-path": "./spacetimedb"
+}
