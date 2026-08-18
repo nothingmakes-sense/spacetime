@@ -1,6 +1,8 @@
 use glam::Vec3;
 
-pub const WINDOW_TITLE: &str = "Rust + Vulkan + Assimp + SpacetimeDB Boilerplate";
+use crate::assets::AdventurerClass;
+
+pub const WINDOW_TITLE: &str = "Spacetime — KayKit Adventurers";
 pub const WINDOW_WIDTH: u32 = 1280;
 pub const WINDOW_HEIGHT: u32 = 720;
 
@@ -15,3 +17,6 @@ pub const GRAVITY: Vec3 = Vec3::new(0.0, -18.0, 0.0);
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 pub const MAX_FRAME_TIME: f32 = 0.05;
+
+/// Default hero loaded from the KayKit pack.
+pub const LOCAL_CLASS: AdventurerClass = AdventurerClass::Knight;

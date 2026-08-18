@@ -33,3 +33,4 @@ rapier3d = "0.22"
 # Vulkan (you will need these later)
 ash = { version = "0.38", features = ["linked"] }
 ash-window = "0.13"
+gltf = "1.4.1"

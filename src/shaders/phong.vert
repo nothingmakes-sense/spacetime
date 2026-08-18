@@ -1,4 +1,5 @@
 #version 450
+// Reference GLSL. The live shader is phong.wgsl (compiled by build.rs).
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
@@ -21,8 +22,7 @@ layout(location = 2) out vec2 fragUV;
 void main() {
     vec4 worldPos = pc.model * vec4(inPosition, 1.0);
     fragPos     = worldPos.xyz;
-    fragNormal  = mat3(transpose(inverse(pc.model))) * inNormal;
+    fragNormal  = mat3(pc.model) * inNormal;
     fragUV      = inUV;
-
     gl_Position = camera.proj * camera.view * worldPos;
 }

@@ -8,7 +8,7 @@ mod physics;
 mod player;
 mod vulkan;
 mod world;
-mod module_bindings; // generated
+mod module_bindings;
 
 use anyhow::{Context, Result};
 use log::info;
@@ -21,7 +21,7 @@ use multiplayer::Multiplayer;
 use world::LocalWorld;
 
 fn main() -> Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    env_logger::Builder::from_env(env_default_filter()).init();
     info!("Starting game client…");
 
     let mode = match try_connect_multiplayer() {
@@ -50,8 +50,12 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn env_default_filter() -> env_logger::Env<'static> {
+    env_logger::Env::default().default_filter_or("info")
+}
+
 fn try_connect_multiplayer() -> Result<Multiplayer> {
-    let mut net = Multiplayer::connect(SPACETIME_URI, SPACETIME_DB_NAME)
+    let net = Multiplayer::connect(SPACETIME_URI, SPACETIME_DB_NAME)
         .context("SpacetimeDB connection failed")?;
 
     std::thread::sleep(std::time::Duration::from_millis(150));
