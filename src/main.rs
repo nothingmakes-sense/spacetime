@@ -1,14 +1,19 @@
+mod anim;
 mod app;
 mod assets;
 mod config;
 mod game_mode;
+mod hud;
 mod input;
+mod items;
+mod module_bindings;
 mod multiplayer;
+mod objects;
 mod physics;
 mod player;
+mod scene;
 mod vulkan;
 mod world;
-mod module_bindings;
 
 use anyhow::{Context, Result};
 use log::info;
@@ -17,6 +22,7 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use app::App;
 use config::{SPACETIME_DB_NAME, SPACETIME_URI};
 use game_mode::GameMode;
+use items::LocalStore;
 use multiplayer::Multiplayer;
 use world::LocalWorld;
 
@@ -37,6 +43,7 @@ fn main() -> Result<()> {
             log::warn!("Falling back to Single-Player mode.");
             GameMode::SinglePlayer {
                 world: LocalWorld::generate_basic(),
+                store: LocalStore::with_default_world(),
             }
         }
     };

@@ -79,6 +79,120 @@ pub fn unit_box(color: [f32; 4]) -> Model {
     }
 }
 
+/// Chest body (0.8 × 0.45 × 0.55) and a thin lid that hinges at the back.
+pub fn chest_parts() -> (Model, Model) {
+    let body = scaled_box(0.80, 0.45, 0.55, [0.45, 0.28, 0.14, 1.0], "chest_body");
+    let mut lid = scaled_box(0.82, 0.06, 0.57, [0.55, 0.34, 0.16, 1.0], "chest_lid");
+    // Sit the lid on top of the body.
+    for v in &mut lid.meshes[0].vertices {
+        v.position[1] += 0.45;
+    }
+    (body, lid)
+}
+
+/// Stone furnace body + a small ember cube parented near the mouth.
+pub fn furnace_parts() -> (Model, Model) {
+    let body = scaled_box(0.72, 1.05, 0.72, [0.28, 0.26, 0.24, 1.0], "furnace");
+    let ember = scaled_box(1.0, 1.0, 1.0, [1.0, 0.42, 0.08, 1.0], "furnace_ember");
+    (body, ember)
+}
+
+/// Wide wooden crafting table.
+pub fn workbench_model() -> Model {
+    scaled_box(1.35, 0.78, 0.75, [0.50, 0.32, 0.16, 1.0], "workbench")
+}
+
+/// HUD slot plate (flat, origin at center).
+pub fn slot_plate(color: [f32; 4], name: &str) -> Model {
+    let mut m = scaled_box(1.0, 0.08, 1.0, color, name);
+    for mesh in &mut m.meshes {
+        for v in &mut mesh.vertices {
+            v.position[1] -= 0.04;
+        }
+    }
+    m
+}
+
+/// Tiny billboard-ish cube used as a world item gem.
+pub fn item_gem(color: [f32; 4]) -> Model {
+    scaled_box(1.0, 1.0, 1.0, color, "item")
+}
+
+/// 3×5 bitmap digit as a textured quad facing +Z, origin at center.
+pub fn digit_quad(digit: u8) -> Model {
+    let bits = DIGITS[(digit as usize).min(9)];
+    let w = 3u32;
+    let h = 5u32;
+    let scale = 4u32;
+    let tw = w * scale;
+    let th = h * scale;
+    let mut px = vec![0u8; (tw * th * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let on = (bits[y as usize] >> (2 - x)) & 1 == 1;
+            if !on {
+                continue;
+            }
+            for sy in 0..scale {
+                for sx in 0..scale {
+                    let ix = (x * scale + sx) as usize;
+                    let iy = (y * scale + sy) as usize;
+                    let i = (iy * tw as usize + ix) * 4;
+                    px[i] = 255;
+                    px[i + 1] = 255;
+                    px[i + 2] = 240;
+                    px[i + 3] = 255;
+                }
+            }
+        }
+    }
+    let hw = 0.5;
+    let hh = 0.5;
+    let n = [0.0, 0.0, 1.0];
+    Model {
+        meshes: vec![Mesh {
+            vertices: vec![
+                Vertex::new([-hw, -hh, 0.0], n, [0.0, 1.0]),
+                Vertex::new([hw, -hh, 0.0], n, [1.0, 1.0]),
+                Vertex::new([hw, hh, 0.0], n, [1.0, 0.0]),
+                Vertex::new([-hw, hh, 0.0], n, [0.0, 0.0]),
+            ],
+            indices: vec![0, 1, 2, 0, 2, 3],
+            albedo: [1.0, 1.0, 1.0, 1.0],
+            albedo_pixels: Some(px),
+            albedo_size: (tw, th),
+        }],
+        name: format!("digit_{digit}"),
+        sockets: Vec::new(),
+    }
+}
+
+const DIGITS: [[u8; 5]; 10] = [
+    [0b111, 0b101, 0b101, 0b101, 0b111], // 0
+    [0b010, 0b110, 0b010, 0b010, 0b111], // 1
+    [0b111, 0b001, 0b111, 0b100, 0b111], // 2
+    [0b111, 0b001, 0b111, 0b001, 0b111], // 3
+    [0b101, 0b101, 0b111, 0b001, 0b001], // 4
+    [0b111, 0b100, 0b111, 0b001, 0b111], // 5
+    [0b111, 0b100, 0b111, 0b101, 0b111], // 6
+    [0b111, 0b001, 0b001, 0b001, 0b001], // 7
+    [0b111, 0b101, 0b111, 0b101, 0b111], // 8
+    [0b111, 0b101, 0b111, 0b001, 0b111], // 9
+];
+
+pub fn scaled_box(sx: f32, sy: f32, sz: f32, color: [f32; 4], name: &str) -> Model {
+    let mut m = unit_box(color);
+    for mesh in &mut m.meshes {
+        for v in &mut mesh.vertices {
+            v.position[0] *= sx;
+            v.position[1] *= sy;
+            v.position[2] *= sz;
+        }
+    }
+    m.name = name.into();
+    m
+}
+
 fn checker_rgba(size: u32, a: [u8; 4], b: [u8; 4]) -> Vec<u8> {
     let mut px = Vec::with_capacity((size * size * 4) as usize);
     let cell = (size / 8).max(1);

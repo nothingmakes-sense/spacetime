@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace]
-exclude = ["spacetimedb"]
+exclude = ["spacetimedb", "items_core"]
 
 [dependencies]
 spacetimedb-sdk = { version = "2.8.*" }

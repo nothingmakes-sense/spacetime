@@ -2,6 +2,8 @@
 
 pub const CHARACTERS_DIR: &str = "assets/kaykit/characters";
 pub const WEAPONS_DIR: &str = "assets/kaykit/weapons";
+pub const ANIM_GENERAL: &str = "assets/kaykit/animations/Rig_Medium_General.glb";
+pub const ANIM_MOVEMENT: &str = "assets/kaykit/animations/Rig_Medium_MovementBasic.glb";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AdventurerClass {

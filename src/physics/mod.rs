@@ -1,3 +1,8 @@
+//! Client-side locomotion.
+//!
+//! The SpacetimeDB **module** (tables + reducers) lives in
+//! `spacetimedb/src/lib.rs`. Do not paste `#[spacetimedb::table]` code here.
+
 use glam::Vec3;
 
 use crate::config::JUMP_FORCE;

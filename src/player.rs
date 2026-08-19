@@ -30,6 +30,7 @@ pub struct Player {
     pub yaw: f32,
     pub pitch: f32,
     pub on_ground: bool,
+    pub sitting: bool,
 }
 
 impl Player {
@@ -40,6 +41,7 @@ impl Player {
             yaw: 0.0,
             pitch: -0.25,
             on_ground: false,
+            sitting: false,
         }
     }
 
@@ -55,6 +57,11 @@ impl Player {
     }
 
     pub fn update_movement(&mut self, input: &InputState, _dt: f32) {
+        if self.sitting {
+            self.velocity.x = 0.0;
+            self.velocity.z = 0.0;
+            return;
+        }
         let forward = look_forward(self.yaw);
         let right = look_right(self.yaw);
 

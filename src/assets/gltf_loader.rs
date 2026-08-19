@@ -194,7 +194,7 @@ fn load_primitive(
         ));
     }
 
-    let (albedo, albedo_pixels, albedo_size) = extract_albedo(primitive, images);
+    let (albedo, albedo_pixels, albedo_size) = extract_albedo_pub(primitive, images);
 
     Ok(Some(Mesh {
         vertices,
@@ -235,7 +235,7 @@ fn skin_vertex(
     (skinned_p / wsum, skinned_n.normalize_or_zero())
 }
 
-fn extract_albedo(
+pub(crate) fn extract_albedo_pub(
     primitive: &gltf::Primitive<'_>,
     images: &[gltf::image::Data],
 ) -> ([f32; 4], Option<Vec<u8>>, (u32, u32)) {

@@ -2,11 +2,18 @@ mod catalog;
 mod gltf_loader;
 mod paths;
 mod primitives;
+mod rig;
+mod skeleton;
 mod vertex;
 
-pub use catalog::{AdventurerClass, GROUND_HALF_EXTENT};
+pub use catalog::{AdventurerClass, ANIM_GENERAL, ANIM_MOVEMENT, GROUND_HALF_EXTENT};
 pub use paths::resolve_asset;
-pub use primitives::{ground_plane, unit_box};
+pub use primitives::{
+    chest_parts, digit_quad, furnace_parts, ground_plane, item_gem, slot_plate, unit_box,
+    workbench_model,
+};
+pub use rig::{load_rigged, RiggedModel, SkinnedPrim};
+pub use skeleton::{Joint, Skeleton};
 pub use vertex::Vertex;
 
 use anyhow::Result;
@@ -16,9 +23,7 @@ use std::path::Path;
 pub struct Mesh {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
-    /// Base-color factor from the material (linear RGBA).
     pub albedo: [f32; 4],
-    /// Optional 8-bit RGBA texture. `None` → solid `albedo`.
     pub albedo_pixels: Option<Vec<u8>>,
     pub albedo_size: (u32, u32),
 }
@@ -26,7 +31,6 @@ pub struct Mesh {
 pub struct Model {
     pub name: String,
     pub meshes: Vec<Mesh>,
-    /// Named attachment points (KayKit `handslot.l` / `handslot.r`, …).
     pub sockets: Vec<(String, Mat4)>,
 }
 
@@ -62,5 +66,13 @@ impl AssetManager {
 
     pub fn load_adventurer(&self, class: AdventurerClass) -> Result<Model> {
         self.load_model(class.glb_path())
+    }
+
+    pub fn load_rigged(&self, path: impl AsRef<Path>) -> Result<RiggedModel> {
+        load_rigged(resolve_asset(path))
+    }
+
+    pub fn load_rigged_class(&self, class: AdventurerClass) -> Result<RiggedModel> {
+        self.load_rigged(class.glb_path())
     }
 }

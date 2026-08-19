@@ -317,6 +317,24 @@ impl VulkanContext {
         Ok(handle)
     }
 
+    /// Rewrite host-visible vertex buffers after CPU skinning.
+    pub fn update_model_vertices(
+        &mut self,
+        handle: ModelHandle,
+        parts: &[Vec<crate::assets::Vertex>],
+    ) {
+        let Some(gpu) = self.models.get(handle.0) else {
+            return;
+        };
+        let n = gpu.parts.len().min(parts.len());
+        for i in 0..n {
+            if parts[i].is_empty() {
+                continue;
+            }
+            memory::copy_to_buffer(&self.device.device, &gpu.parts[i].vertices, &parts[i]);
+        }
+    }
+
     pub fn begin_frame(&mut self) -> Result<()> {
         self.skip_frame = false;
         self.recording_image = None;
