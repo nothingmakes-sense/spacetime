@@ -62,6 +62,12 @@ impl GameObject for LootObject {
         ctx.items.pickup(self.loot_id)
     }
 
+    fn apply_loot_visual(&mut self, stack: Stack, handle: ModelHandle) {
+        self.stack = stack;
+        self.handle = handle;
+        self.base.name = format!("{} x{}", stack.item.def().name, stack.count);
+    }
+
     fn draws(&self) -> Vec<DrawRequest> {
         if self.stack.item == ItemId::EMPTY {
             return Vec::new();

@@ -205,6 +205,27 @@ fn checker_rgba(size: u32, a: [u8; 4], b: [u8; 4]) -> Vec<u8> {
     px
 }
 
+/// Screen-facing textured quad (XY, +Z). Used for inventory slot sprites.
+pub fn sprite_quad(pixels: Vec<u8>, w: u32, h: u32, name: &str) -> Model {
+    let n = [0.0, 0.0, 1.0];
+    Model {
+        meshes: vec![Mesh {
+            vertices: vec![
+                Vertex::new([-0.5, -0.5, 0.0], n, [0.0, 1.0]),
+                Vertex::new([0.5, -0.5, 0.0], n, [1.0, 1.0]),
+                Vertex::new([0.5, 0.5, 0.0], n, [1.0, 0.0]),
+                Vertex::new([-0.5, 0.5, 0.0], n, [0.0, 0.0]),
+            ],
+            indices: vec![0, 1, 2, 0, 2, 3],
+            albedo: [1.0, 1.0, 1.0, 1.0],
+            albedo_pixels: Some(pixels),
+            albedo_size: (w.max(1), h.max(1)),
+        }],
+        name: name.into(),
+        sockets: Vec::new(),
+    }
+}
+
 /// 5×7 bitmap glyph as a textured quad facing +Z. Used by the F3 debug overlay.
 pub fn glyph_quad(ch: char) -> Model {
     let bits = glyph_bits(ch);

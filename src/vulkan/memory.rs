@@ -132,11 +132,12 @@ pub unsafe fn destroy_image(device: &Device, img: &AllocatedImage) {
 
 pub fn copy_to_buffer<T: bytemuck::Pod>(device: &Device, buf: &AllocatedBuffer, data: &[T]) {
     let bytes = bytemuck::cast_slice(data);
+    let n = bytes.len().min(buf.size as usize);
     unsafe {
         let ptr = device
             .map_memory(buf.memory, 0, buf.size, vk::MemoryMapFlags::empty())
             .expect("map memory");
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, n);
         device.unmap_memory(buf.memory);
     }
 }

@@ -111,4 +111,11 @@ pub trait GameObject: Send {
     }
 
     fn draws(&self) -> Vec<DrawRequest>;
+
+    /// Local player: snap the mesh to the live kinematic pose every render
+    /// frame so the camera and body never disagree (that was the walk stutter).
+    fn sync_local(&mut self, _pos: Vec3, _yaw: f32) {}
+
+    /// World loot: swap the ResourceBits mesh when the stack size crosses a tier.
+    fn apply_loot_visual(&mut self, _stack: crate::items::Stack, _handle: ModelHandle) {}
 }

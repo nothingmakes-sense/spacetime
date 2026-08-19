@@ -11,7 +11,7 @@ mod ubo;
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use ash::vk;
 use glam::{Mat4, Vec3};
 use winit::window::Window;
@@ -44,8 +44,6 @@ struct GpuModel {
 
 pub struct VulkanContext {
     window: Arc<Window>,
-    instance: InstanceBundle,
-    device: DeviceBundle,
     pipeline: PipelineBundle,
     swapchain: SwapchainBundle,
 
@@ -72,6 +70,10 @@ pub struct VulkanContext {
 
     pending_camera: CameraUbo,
     pending_light: LightUbo,
+
+    /// Device must drop before instance. Keep these last.
+    device: DeviceBundle,
+    instance: InstanceBundle,
 }
 
 impl VulkanContext {
@@ -124,20 +126,20 @@ impl VulkanContext {
         let pool_sizes = [
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::UNIFORM_BUFFER,
-                descriptor_count: 64,
+                descriptor_count: 256,
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::SAMPLED_IMAGE,
-                descriptor_count: 64,
+                descriptor_count: 4096,
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::SAMPLER,
-                descriptor_count: 64,
+                descriptor_count: 4096,
             },
         ];
         let pool_ci = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
-            .max_sets(128)
+            .max_sets(4096)
             .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET);
         let descriptor_pool = unsafe { device.device.create_descriptor_pool(&pool_ci, None)? };
 
@@ -243,8 +245,6 @@ impl VulkanContext {
         log::info!("Vulkan renderer ready");
         Ok(Self {
             window,
-            instance,
-            device,
             pipeline,
             swapchain,
             command_pool,
@@ -265,6 +265,8 @@ impl VulkanContext {
             resized: false,
             pending_camera: CameraUbo::new(Mat4::IDENTITY, Mat4::IDENTITY, Vec3::ZERO),
             pending_light: LightUbo::new(Vec3::Y * 10.0, Vec3::ONE, 0.2, 0.4, 32.0),
+            device,
+            instance,
         })
     }
 
@@ -275,85 +277,19 @@ impl VulkanContext {
                 log::warn!("skipping empty submesh on '{}'", model.name);
                 continue;
             }
-            let vsize = (mesh.vertices.len() * std::mem::size_of::<crate::assets::Vertex>()) as u64;
-            let isize = (mesh.indices.len() * std::mem::size_of::<u32>()) as u64;
-
-            let vertices = memory::create_buffer(
-                &self.instance.instance,
-                &self.device.device,
-                self.device.physical,
-                vsize,
-                vk::BufferUsageFlags::VERTEX_BUFFER,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )?;
-            memory::copy_to_buffer(&self.device.device, &vertices, &mesh.vertices);
-
-            let indices = memory::create_buffer(
-                &self.instance.instance,
-                &self.device.device,
-                self.device.physical,
-                isize,
-                vk::BufferUsageFlags::INDEX_BUFFER,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )?;
-            memory::copy_to_buffer(&self.device.device, &indices, &mesh.indices);
-
-            let solid;
-            let (px, w, h) = if let Some(ref pixels) = mesh.albedo_pixels {
-                (pixels.as_slice(), mesh.albedo_size.0, mesh.albedo_size.1)
-            } else {
-                let c = mesh.albedo;
-                solid = [
-                    (c[0].clamp(0.0, 1.0) * 255.0) as u8,
-                    (c[1].clamp(0.0, 1.0) * 255.0) as u8,
-                    (c[2].clamp(0.0, 1.0) * 255.0) as u8,
-                    (c[3].clamp(0.0, 1.0) * 255.0) as u8,
-                ];
-                (solid.as_slice(), 1, 1)
-            };
-
-            let tex = texture::create_texture(
-                &self.instance.instance,
-                &self.device.device,
-                self.device.physical,
-                self.device.graphics_queue,
-                self.command_pool,
-                px,
-                w.max(1),
-                h.max(1),
-            )?;
-
-            let layouts = [self.pipeline.material_set_layout];
-            let alloc = vk::DescriptorSetAllocateInfo::default()
-                .descriptor_pool(self.descriptor_pool)
-                .set_layouts(&layouts);
-            let set = unsafe { self.device.device.allocate_descriptor_sets(&alloc)? }[0];
-
-            let image_info = vk::DescriptorImageInfo::default()
-                .image_view(tex.view)
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-            let sampler_info = vk::DescriptorImageInfo::default().sampler(self.sampler);
-            let writes = [
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(0)
-                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                    .image_info(std::slice::from_ref(&image_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(1)
-                    .descriptor_type(vk::DescriptorType::SAMPLER)
-                    .image_info(std::slice::from_ref(&sampler_info)),
-            ];
-            unsafe { self.device.device.update_descriptor_sets(&writes, &[]) };
-
-            parts.push(GpuSubmesh {
-                vertices,
-                indices,
-                index_count: mesh.indices.len() as u32,
-                material_set: set,
-                texture: tex,
-            });
+            match self.upload_submesh(mesh) {
+                Ok(part) => parts.push(part),
+                Err(e) => {
+                    unsafe {
+                        for p in &parts {
+                            memory::destroy_buffer(&self.device.device, &p.vertices);
+                            memory::destroy_buffer(&self.device.device, &p.indices);
+                            memory::destroy_image(&self.device.device, &p.texture);
+                        }
+                    }
+                    return Err(e.context(format!("submesh of '{}'", model.name)));
+                }
+            }
         }
 
         if parts.is_empty() {
@@ -369,6 +305,113 @@ impl VulkanContext {
         );
         self.models.push(GpuModel { parts });
         Ok(handle)
+    }
+
+    fn upload_submesh(&self, mesh: &crate::assets::Mesh) -> Result<GpuSubmesh> {
+        let vsize = (mesh.vertices.len() * std::mem::size_of::<crate::assets::Vertex>()) as u64;
+        let isize = (mesh.indices.len() * std::mem::size_of::<u32>()) as u64;
+
+        let vertices = memory::create_buffer(
+            &self.instance.instance,
+            &self.device.device,
+            self.device.physical,
+            vsize,
+            vk::BufferUsageFlags::VERTEX_BUFFER,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+        memory::copy_to_buffer(&self.device.device, &vertices, &mesh.vertices);
+
+        let indices = match memory::create_buffer(
+            &self.instance.instance,
+            &self.device.device,
+            self.device.physical,
+            isize,
+            vk::BufferUsageFlags::INDEX_BUFFER,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        ) {
+            Ok(b) => b,
+            Err(e) => {
+                unsafe { memory::destroy_buffer(&self.device.device, &vertices) };
+                return Err(e);
+            }
+        };
+        memory::copy_to_buffer(&self.device.device, &indices, &mesh.indices);
+
+        let solid;
+        let (px, w, h) = if let Some(ref pixels) = mesh.albedo_pixels {
+            (pixels.as_slice(), mesh.albedo_size.0, mesh.albedo_size.1)
+        } else {
+            let c = mesh.albedo;
+            solid = [
+                (c[0].clamp(0.0, 1.0) * 255.0) as u8,
+                (c[1].clamp(0.0, 1.0) * 255.0) as u8,
+                (c[2].clamp(0.0, 1.0) * 255.0) as u8,
+                (c[3].clamp(0.0, 1.0) * 255.0) as u8,
+            ];
+            (solid.as_slice(), 1, 1)
+        };
+
+        let tex = match texture::create_texture(
+            &self.instance.instance,
+            &self.device.device,
+            self.device.physical,
+            self.device.graphics_queue,
+            self.command_pool,
+            px,
+            w.max(1),
+            h.max(1),
+        ) {
+            Ok(t) => t,
+            Err(e) => {
+                unsafe {
+                    memory::destroy_buffer(&self.device.device, &vertices);
+                    memory::destroy_buffer(&self.device.device, &indices);
+                }
+                return Err(e);
+            }
+        };
+
+        let layouts = [self.pipeline.material_set_layout];
+        let alloc = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(self.descriptor_pool)
+            .set_layouts(&layouts);
+        let set = match unsafe { self.device.device.allocate_descriptor_sets(&alloc) } {
+            Ok(s) => s[0],
+            Err(e) => {
+                unsafe {
+                    memory::destroy_buffer(&self.device.device, &vertices);
+                    memory::destroy_buffer(&self.device.device, &indices);
+                    memory::destroy_image(&self.device.device, &tex);
+                }
+                return Err(anyhow!("descriptor set: {e}"));
+            }
+        };
+
+        let image_info = vk::DescriptorImageInfo::default()
+            .image_view(tex.view)
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        let sampler_info = vk::DescriptorImageInfo::default().sampler(self.sampler);
+        let writes = [
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .image_info(std::slice::from_ref(&image_info)),
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(1)
+                .descriptor_type(vk::DescriptorType::SAMPLER)
+                .image_info(std::slice::from_ref(&sampler_info)),
+        ];
+        unsafe { self.device.device.update_descriptor_sets(&writes, &[]) };
+
+        Ok(GpuSubmesh {
+            vertices,
+            indices,
+            index_count: mesh.indices.len() as u32,
+            material_set: set,
+            texture: tex,
+        })
     }
 
     /// Rewrite host-visible vertex buffers after CPU skinning.

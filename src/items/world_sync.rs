@@ -33,12 +33,15 @@ impl WorldSync {
             }
         }
         for loot in &view.loot {
-            if self.loot.contains_key(&loot.id) {
-                continue;
-            }
-            let Some(handle) = meshes.item(loot.stack.item) else {
+            let Some(handle) = meshes.visual(loot.stack.item, loot.stack.count) else {
                 continue;
             };
+            if let Some(&oid) = self.loot.get(&loot.id) {
+                if let Some(node) = scene.nodes.iter_mut().find(|n| n.base().id == oid) {
+                    node.apply_loot_visual(loot.stack, handle);
+                }
+                continue;
+            }
             let oid = scene.alloc_id();
             scene.spawn(Box::new(LootObject::new(
                 Object::new(oid, loot.stack.item.def().name, ObjectKind::Loot)

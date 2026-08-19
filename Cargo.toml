@@ -34,3 +34,4 @@ rapier3d = "0.22"
 ash = { version = "0.38", features = ["linked"] }
 ash-window = "0.13"
 gltf = "1.4.1"
+image = "0.25.10"

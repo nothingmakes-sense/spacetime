@@ -7,7 +7,7 @@ use super::{
     decode_slots, empty_bag, encode_slots, first_compatible, first_nonempty, insert_stack,
     recipe_by_id, recipes_for, step_furnace, take_inputs, take_one, CraftStation, ItemId, Recipe,
     SlotRole, Stack, StationKind, BAG_SLOTS, DEFAULT_LOOT, DEFAULT_STATIONS, PICKUP_RANGE,
-    STARTER_KIT, STATION_RANGE,
+    STACK_MERGE_RANGE, STARTER_KIT, STATION_RANGE,
 };
 
 #[derive(Clone, Debug)]
@@ -198,6 +198,32 @@ impl LocalStore {
         }
     }
 
+    /// Collapse same-item world drops that sit next to each other.
+    /// The surviving pile grows; [`ItemId::visual_mesh`] then picks a bigger
+    /// ResourceBits model (1 log → log stack, 1 bar → bar crate, …).
+    fn merge_nearby_loot(&mut self) {
+        let mut i = 0;
+        while i < self.loot.len() {
+            let mut j = i + 1;
+            while j < self.loot.len() {
+                let same = self.loot[i].stack.item == self.loot[j].stack.item
+                    && !self.loot[i].stack.is_empty();
+                let close = self.loot[i].pos.distance(self.loot[j].pos) <= STACK_MERGE_RANGE;
+                if same && close {
+                    let extra = self.loot[j].stack;
+                    let leftover = self.loot[i].stack.absorb(extra);
+                    if leftover.is_empty() {
+                        self.loot.remove(j);
+                        continue;
+                    }
+                    self.loot[j].stack = leftover;
+                }
+                j += 1;
+            }
+            i += 1;
+        }
+    }
+
     fn station_in_range(st: &StationView, pos: Vec3) -> bool {
         st.pos.distance(pos) <= STATION_RANGE
     }
@@ -261,6 +287,7 @@ impl ItemStore for LocalStore {
             self.furnace_acc -= 0.05;
             self.step_furnaces();
         }
+        self.merge_nearby_loot();
     }
 
     fn pickup(&mut self, loot_id: u64) -> bool {
@@ -548,8 +575,16 @@ mod tests {
         assert_eq!(st.slots[0].count, 4);
     }
 
-    #[allow(dead_code)]
-    fn _station_range_helper() {
-        let _ = LocalStore::station_in_range;
+    #[test]
+    fn nearby_same_item_merges_and_grows() {
+        let mut s = LocalStore::new();
+        s.spawn_loot(Stack::new(ItemId::WOOD, 3), Vec3::ZERO);
+        s.spawn_loot(Stack::new(ItemId::WOOD, 5), Vec3::new(0.4, 0.0, 0.2));
+        s.tick(0.05);
+        assert_eq!(s.view().loot.len(), 1);
+        assert_eq!(s.view().loot[0].stack.count, 8);
+        assert_eq!(ItemId::WOOD.visual_mesh(8), "Wood_Log_B");
+        assert_eq!(ItemId::WOOD.visual_mesh(1), "Wood_Log_A");
     }
 }
+

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ash::{vk, Device};
 
 use super::memory::{self, AllocatedBuffer, AllocatedImage};
@@ -24,7 +24,7 @@ pub fn create_texture(
     )?;
     memory::copy_to_buffer(device, &staging, pixels);
 
-    let image = memory::create_image_2d(
+    let image = match memory::create_image_2d(
         instance,
         device,
         physical,
@@ -35,27 +35,40 @@ pub fn create_texture(
         vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
         vk::ImageAspectFlags::COLOR,
-    )?;
+    ) {
+        Ok(img) => img,
+        Err(e) => {
+            unsafe { memory::destroy_buffer(device, &staging) };
+            return Err(e);
+        }
+    };
 
-    transition(
-        device,
-        graphics_queue,
-        command_pool,
-        image.image,
-        vk::ImageLayout::UNDEFINED,
-        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-    )?;
-    copy_buffer_to_image(device, graphics_queue, command_pool, &staging, &image)?;
-    transition(
-        device,
-        graphics_queue,
-        command_pool,
-        image.image,
-        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-    )?;
+    let upload = (|| {
+        transition(
+            device,
+            graphics_queue,
+            command_pool,
+            image.image,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        )?;
+        copy_buffer_to_image(device, graphics_queue, command_pool, &staging, &image)?;
+        transition(
+            device,
+            graphics_queue,
+            command_pool,
+            image.image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        )?;
+        Ok::<(), anyhow::Error>(())
+    })();
 
     unsafe { memory::destroy_buffer(device, &staging) };
+    if let Err(e) = upload {
+        unsafe { memory::destroy_image(device, &image) };
+        return Err(e).context("texture upload");
+    }
     Ok(image)
 }
 

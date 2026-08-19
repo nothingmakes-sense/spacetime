@@ -2,8 +2,8 @@
 //!
 //! **In:** winit events, [`GameMode`] (local store or SpacetimeDB connection).
 //! **Out:** frames via [`VulkanContext`], reducer calls through [`ItemStore`].
-//! Physics runs at [`FIXED_DT`]; `render` interpolates `prev_pos` → current
-//! so walking does not quantize to 60 Hz.
+//! Physics/items tick at [`FIXED_DT`]; locomotion uses the real frame `dt`
+//! so the chase camera and the player mesh never disagree.
 
 use anyhow::{Context, Result};
 use glam::{Mat4, Vec3};
@@ -57,8 +57,6 @@ pub struct App {
 
     last_frame: Instant,
     accumulator: f32,
-    /// Physics pose at the start of this frame's steps — lerped in `render`.
-    prev_pos: Vec3,
     fps: f32,
 
     ground: Option<crate::vulkan::ModelHandle>,
@@ -82,7 +80,6 @@ impl App {
             world_sync: WorldSync::new(),
             last_frame: Instant::now(),
             accumulator: 0.0,
-            prev_pos: Vec3::new(0.0, 0.0, 6.0),
             fps: 60.0,
             ground: None,
             remote_mesh: None,
@@ -344,6 +341,30 @@ impl App {
         self.item_ui.on_station_closed();
     }
 
+    /// Kinematic step. Called every render frame with the real `dt` so the
+    /// body and chase camera advance together (no 60 Hz pose snap).
+    fn drive_player(&mut self, dt: f32) {
+        self.player.update_movement(&self.input, dt);
+        self.physics.set_wish_horizontal(
+            self.player.velocity.x,
+            self.player.velocity.z,
+            self.input.jump && !self.player.sitting,
+        );
+        self.physics.step(dt);
+        if let Some((pos, on_ground)) = self.physics.player_transform() {
+            self.player.position = pos;
+            self.player.on_ground = on_ground;
+            self.player.velocity.y = self.physics.player_velocity().y;
+        }
+    }
+
+    fn step_locomotion(&mut self, dt: f32) {
+        self.drive_player(dt);
+        for n in &mut self.scene.nodes {
+            n.sync_local(self.player.position, self.player.yaw);
+        }
+    }
+
     fn update(&mut self, dt: f32) {
         let edges = self.input.consume_edges();
         if edges.sit {
@@ -352,7 +373,6 @@ impl App {
 
         self.handle_item_input(&edges);
 
-        // Station UI: walking out of range closes it.
         {
             let view = self.mode.items().view();
             if let Some(st) = view.open_station_view() {
@@ -361,20 +381,6 @@ impl App {
                     self.close_all_ui();
                 }
             }
-        }
-
-        self.player.update_movement(&self.input, dt);
-        self.physics.set_wish_horizontal(
-            self.player.velocity.x,
-            self.player.velocity.z,
-            self.input.jump && !self.player.sitting,
-        );
-        self.physics.step(dt);
-
-        if let Some((pos, on_ground)) = self.physics.player_transform() {
-            self.player.position = pos;
-            self.player.on_ground = on_ground;
-            self.player.velocity.y = self.physics.player_velocity().y;
         }
 
         self.mode.items().tick(dt);
@@ -457,9 +463,7 @@ impl App {
             return Ok(());
         }
         let aspect = size.width as f32 / size.height.max(1) as f32;
-        let alpha = (self.accumulator / FIXED_DT).clamp(0.0, 1.0);
-        let render_pos = self.prev_pos.lerp(self.player.position, alpha);
-        let (view, eye) = self.player.chase_view_at(render_pos);
+        let (view, eye) = self.player.chase_view_matrix();
         let proj = Mat4::perspective_rh(55f32.to_radians(), aspect, 0.1, 200.0);
 
         vk.begin_frame()?;
@@ -635,13 +639,10 @@ impl ApplicationHandler for App {
             self.fps
         };
 
+        self.step_locomotion(frame_time);
+
         self.accumulator += frame_time;
-        let mut stepped = false;
         while self.accumulator >= FIXED_DT {
-            if !stepped {
-                self.prev_pos = self.player.position;
-                stepped = true;
-            }
             self.update(FIXED_DT);
             self.accumulator -= FIXED_DT;
         }

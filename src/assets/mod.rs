@@ -9,14 +9,15 @@ mod vertex;
 pub use catalog::{AdventurerClass, ANIM_GENERAL, ANIM_MOVEMENT, GROUND_HALF_EXTENT};
 pub use paths::resolve_asset;
 pub use primitives::{
-    chest_parts, digit_quad, furnace_parts, glyph_quad, ground_plane, item_gem, slot_plate, unit_box,
-    workbench_model,
+    chest_parts, digit_quad, furnace_parts, glyph_quad, ground_plane, item_gem, slot_plate,
+    sprite_quad, unit_box, workbench_model,
 };
 pub use rig::{load_rigged, RiggedModel, SkinnedPrim};
+pub use gltf_loader::load_gltf;
 pub use skeleton::{Joint, Skeleton};
 pub use vertex::Vertex;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use glam::Mat4;
 use std::path::Path;
 
@@ -75,4 +76,14 @@ impl AssetManager {
     pub fn load_rigged_class(&self, class: AdventurerClass) -> Result<RiggedModel> {
         self.load_rigged(class.glb_path())
     }
+}
+
+/// Load an 8-bit RGBA PNG. Used for the InventorySlotsSet frames.
+pub fn load_rgba_png(path: impl AsRef<Path>) -> Result<(u32, u32, Vec<u8>)> {
+    let path = resolve_asset(path);
+    let img = image::open(&path)
+        .with_context(|| format!("png {}", path.display()))?
+        .to_rgba8();
+    let (w, h) = img.dimensions();
+    Ok((w, h, img.into_raw()))
 }

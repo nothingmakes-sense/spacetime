@@ -13,6 +13,7 @@ mod physics;
 mod player;
 mod scene;
 mod vulkan;
+mod voxel;
 mod world;
 
 use anyhow::{Context, Result};

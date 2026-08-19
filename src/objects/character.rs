@@ -196,6 +196,13 @@ impl GameObject for CharacterObject {
         self.apply_pose(ctx.dt, ctx);
     }
 
+    fn sync_local(&mut self, pos: Vec3, yaw: f32) {
+        if self.is_local {
+            self.base.transform.translation = pos;
+            self.yaw = yaw;
+        }
+    }
+
     fn skinned_upload(&self) -> Option<(ModelHandle, &[Vec<Vertex>])> {
         if self.skinned.is_empty() {
             None

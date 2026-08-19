@@ -14,10 +14,12 @@ use std::collections::HashMap;
 use anyhow::Result;
 use glam::{Mat4, Quat, Vec3};
 
-use crate::assets::{digit_quad, glyph_quad, item_gem, slot_plate};
+use crate::assets::{
+    digit_quad, glyph_quad, item_gem, load_rgba_png, resolve_asset, slot_plate, sprite_quad,
+};
 use crate::items::{
     selected_recipe, ItemId, ItemUi, ItemView, SlotRef, Stack, StationKind, BAG_SLOTS, CATALOG,
-    HOTBAR,
+    HOTBAR, RESOURCE_BITS_DIR,
 };
 use crate::scene::DrawRequest;
 use crate::vulkan::{ModelHandle, VulkanContext};
@@ -36,8 +38,10 @@ const ST_Y: f32 = 0.30;
 
 pub struct ItemMeshes {
     pub by_item: HashMap<u16, ModelHandle>,
+    pub by_mesh: HashMap<String, ModelHandle>,
     pub slot: ModelHandle,
     pub slot_sel: ModelHandle,
+    pub slot_station: ModelHandle,
     pub slot_panel: ModelHandle,
     pub slot_border: ModelHandle,
     pub digits: [ModelHandle; 10],
@@ -50,8 +54,7 @@ pub struct ItemMeshes {
 }
 
 impl ItemMeshes {
-    /// Upload every HUD mesh. Colors are white / black with alpha so the
-    /// overlay pipeline can blend them over the 3D scene.
+    /// Upload slot sprites, ResourceBits meshes, digits, and station props.
     pub fn upload(
         vk: &mut VulkanContext,
         chest_body: ModelHandle,
@@ -61,8 +64,24 @@ impl ItemMeshes {
         workbench: ModelHandle,
     ) -> Result<Self> {
         let mut by_item = HashMap::new();
+        let mut by_mesh = HashMap::new();
         for def in CATALOG {
             by_item.insert(def.id.0, vk.upload_model(&item_gem(def.color))?);
+            for stem in std::iter::once(def.mesh).chain(def.tiers.iter().map(|(_, s)| *s)) {
+                if stem.is_empty() || by_mesh.contains_key(stem) {
+                    continue;
+                }
+                let path = resolve_asset(format!("{RESOURCE_BITS_DIR}/{stem}.gltf"));
+                match crate::assets::load_gltf(&path) {
+                    Ok(model) => match vk.upload_model(&model) {
+                        Ok(h) => {
+                            by_mesh.insert(stem.to_string(), h);
+                        }
+                        Err(e) => log::warn!("upload resource bit {stem}: {e:#}"),
+                    },
+                    Err(e) => log::warn!("resource bit {stem}: {e:#}"),
+                }
+            }
         }
         let mut digits = [ModelHandle(0); 10];
         for d in 0..10u8 {
@@ -75,10 +94,12 @@ impl ItemMeshes {
         }
         Ok(Self {
             by_item,
-            slot: vk.upload_model(&slot_plate([1.0, 1.0, 1.0, 0.38], "slot"))?,
-            slot_sel: vk.upload_model(&slot_plate([1.0, 0.95, 0.55, 0.62], "slot_sel"))?,
+            by_mesh,
+            slot: load_slot(vk, "wood")?,
+            slot_sel: load_slot(vk, "orange_red")?,
+            slot_station: load_slot(vk, "coldsteel")?,
             slot_panel: vk.upload_model(&slot_plate([1.0, 1.0, 1.0, 0.22], "panel"))?,
-            slot_border: vk.upload_model(&slot_plate([0.05, 0.05, 0.05, 0.72], "border"))?,
+            slot_border: vk.upload_model(&slot_plate([0.05, 0.05, 0.05, 0.55], "border"))?,
             digits,
             glyphs,
             chest_body,
@@ -90,6 +111,17 @@ impl ItemMeshes {
     }
 
     pub fn item(&self, id: ItemId) -> Option<ModelHandle> {
+        self.visual(id, 1)
+    }
+
+    /// Mesh for this stack size — upgrades when nearby drops auto-merge.
+    pub fn visual(&self, id: ItemId, count: u16) -> Option<ModelHandle> {
+        let stem = id.visual_mesh(count);
+        if !stem.is_empty() {
+            if let Some(h) = self.by_mesh.get(stem) {
+                return Some(*h);
+            }
+        }
         self.by_item.get(&id.0).copied()
     }
 
@@ -100,6 +132,11 @@ impl ItemMeshes {
             StationKind::Workbench => self.workbench,
         }
     }
+}
+
+fn load_slot(vk: &mut VulkanContext, name: &str) -> Result<ModelHandle> {
+    let (w, h, px) = load_rgba_png(format!("assets/ui/slots/{name}.png"))?;
+    vk.upload_model(&sprite_quad(px, w, h, name))
 }
 
 /// Snapshot of sim state for the F3 overlay. Filled in `App::render`.
@@ -256,20 +293,23 @@ pub fn hud_draws(
         }
     }
 
-    // Plates first so gems sit on top.
+    // Slot sprites first so the ResourceBits meshes sit on top.
     for (slot, rect) in &slots {
         let selected = match slot {
             SlotRef::Bag(i) => *i == view.selected,
             SlotRef::Station(i) => ui.focus_station && *i == ui.station_cursor,
         };
-        let s = (rect.hw * 2.0) * if selected { 1.06 } else { 1.0 };
+        let s = (rect.hw * 2.0) * if selected { 1.08 } else { 1.0 };
+        let frame = if selected {
+            meshes.slot_sel
+        } else if matches!(slot, SlotRef::Station(_)) {
+            meshes.slot_station
+        } else {
+            meshes.slot
+        };
         out.push(DrawRequest {
-            handle: meshes.slot_border,
-            model: card(rect.x, rect.y, s + 0.012, s + 0.012),
-        });
-        out.push(DrawRequest {
-            handle: if selected { meshes.slot_sel } else { meshes.slot },
-            model: card(rect.x, rect.y, s, s),
+            handle: frame,
+            model: sprite(rect.x, rect.y, s, s),
         });
     }
 
@@ -287,11 +327,11 @@ pub fn hud_draws(
         if stack.is_empty() {
             continue;
         }
-        if let Some(h) = meshes.item(stack.item) {
+        if let Some(h) = meshes.visual(stack.item, stack.count) {
             let is = if stack.item.def().tool {
                 rect.hw * 1.15
             } else {
-                rect.hw
+                rect.hw * 0.95
             };
             out.push(DrawRequest {
                 handle: h,
@@ -335,7 +375,7 @@ fn push_item(out: &mut Vec<DrawRequest>, meshes: &ItemMeshes, stack: Stack, x: f
     if stack.is_empty() {
         return;
     }
-    let Some(h) = meshes.item(stack.item) else {
+    let Some(h) = meshes.visual(stack.item, stack.count) else {
         return;
     };
     out.push(DrawRequest {
@@ -423,11 +463,20 @@ fn draw_text(out: &mut Vec<DrawRequest>, meshes: &ItemMeshes, text: &str, x: f32
     }
 }
 
-/// XZ-flat plate/cube → screen card at `(x, y)` in NDC.
+/// XZ-flat plate/cube → screen card at `(x, y)` in NDC (3D ResourceBits).
 fn card(x: f32, y: f32, w: f32, h: f32) -> Mat4 {
     Mat4::from_scale_rotation_translation(
         Vec3::new(w, 0.03, h),
         Quat::from_rotation_x(FACE_CAM),
+        Vec3::new(x, y, 0.0),
+    )
+}
+
+/// InventorySlotsSet sprite (already faces +Z) placed in NDC.
+fn sprite(x: f32, y: f32, w: f32, h: f32) -> Mat4 {
+    Mat4::from_scale_rotation_translation(
+        Vec3::new(w, h, 1.0),
+        Quat::IDENTITY,
         Vec3::new(x, y, 0.0),
     )
 }

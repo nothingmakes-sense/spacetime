@@ -89,6 +89,46 @@ pub const RECIPES: &[Recipe] = &[
         output: Ingredient { item: ItemId::COOKED_MEAT, count: 1 },
         smelt_ticks: 50,
     },
+    Recipe {
+        id: 12,
+        name: "Smelt copper",
+        station: CraftStation::Furnace,
+        inputs: &[Ingredient { item: ItemId::COPPER_NUGGET, count: 1 }],
+        output: Ingredient { item: ItemId::COPPER_BAR, count: 1 },
+        smelt_ticks: 60,
+    },
+    Recipe {
+        id: 13,
+        name: "Smelt silver",
+        station: CraftStation::Furnace,
+        inputs: &[Ingredient { item: ItemId::SILVER_NUGGET, count: 1 }],
+        output: Ingredient { item: ItemId::SILVER_BAR, count: 1 },
+        smelt_ticks: 70,
+    },
+    Recipe {
+        id: 14,
+        name: "Smelt gold",
+        station: CraftStation::Furnace,
+        inputs: &[Ingredient { item: ItemId::GOLD_NUGGET, count: 1 }],
+        output: Ingredient { item: ItemId::GOLD_BAR, count: 1 },
+        smelt_ticks: 90,
+    },
+    Recipe {
+        id: 15,
+        name: "Fire brick",
+        station: CraftStation::Furnace,
+        inputs: &[Ingredient { item: ItemId::STONE, count: 1 }],
+        output: Ingredient { item: ItemId::STONE_BRICK, count: 1 },
+        smelt_ticks: 40,
+    },
+    Recipe {
+        id: 16,
+        name: "Saw planks",
+        station: CraftStation::Workbench,
+        inputs: &[Ingredient { item: ItemId::WOOD, count: 1 }],
+        output: Ingredient { item: ItemId::WOOD_PLANK, count: 2 },
+        smelt_ticks: 0,
+    },
 ];
 
 pub fn recipe_by_id(id: u16) -> Option<&'static Recipe> {
