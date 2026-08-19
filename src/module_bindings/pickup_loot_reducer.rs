@@ -6,44 +6,46 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct SetNameArgs {
-    pub name: String,
+pub(super) struct PickupLootArgs {
+    pub loot_id: u64,
 }
 
-impl From<SetNameArgs> for super::Reducer {
-    fn from(args: SetNameArgs) -> Self {
-        Self::SetName { name: args.name }
+impl From<PickupLootArgs> for super::Reducer {
+    fn from(args: PickupLootArgs) -> Self {
+        Self::PickupLoot {
+            loot_id: args.loot_id,
+        }
     }
 }
 
-impl __sdk::InModule for SetNameArgs {
+impl __sdk::InModule for PickupLootArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `set_name`.
+/// Extension trait for access to the reducer `pickup_loot`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait set_name {
-    /// Request that the remote module invoke the reducer `set_name` to run as soon as possible.
+pub trait pickup_loot {
+    /// Request that the remote module invoke the reducer `pickup_loot` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`set_name:set_name_then`] to run a callback after the reducer completes.
-    fn set_name(&self, name: String) -> __sdk::Result<()> {
-        self.set_name_then(name, |_, _| {})
+    /// /// Use [`pickup_loot:pickup_loot_then`] to run a callback after the reducer completes.
+    fn pickup_loot(&self, loot_id: u64) -> __sdk::Result<()> {
+        self.pickup_loot_then(loot_id, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `set_name` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `pickup_loot` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn set_name_then(
+    fn pickup_loot_then(
         &self,
-        name: String,
+        loot_id: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -51,16 +53,16 @@ pub trait set_name {
     ) -> __sdk::Result<()>;
 }
 
-impl set_name for super::RemoteReducers {
-    fn set_name_then(
+impl pickup_loot for super::RemoteReducers {
+    fn pickup_loot_then(
         &self,
-        name: String,
+        loot_id: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(SetNameArgs { name }, callback)
+            .invoke_reducer_with_callback(PickupLootArgs { loot_id }, callback)
     }
 }

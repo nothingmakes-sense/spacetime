@@ -2,6 +2,8 @@
 //! extra workspace member. The SpacetimeDB module path-includes this
 //! same folder so both modes stay in lockstep.
 
+#![allow(unused_imports)]
+
 mod catalog;
 mod logic;
 mod recipe;

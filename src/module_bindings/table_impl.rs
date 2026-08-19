@@ -20,6 +20,16 @@ macro_rules! impl_spacetime_table {
             ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
         }
 
+        pub struct TableAccessorMarker;
+
+        impl __sdk::TableAccessor<super::RemoteTables> for TableAccessorMarker {
+            type Row = $Row;
+            type Handle<'db> = $Handle<'db>;
+            fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+                db.$accessor()
+            }
+        }
+
         pub trait $Access {
             #[allow(non_snake_case)]
             fn $accessor(&self) -> $Handle<'_>;

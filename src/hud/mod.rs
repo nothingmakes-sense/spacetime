@@ -151,7 +151,7 @@ pub fn hud_draws(meshes: &ItemMeshes, view: &ItemView, ui: &ItemUi, eye: Vec3, v
             let mut x = -0.38;
             let y = 0.46;
             for ing in recipe.inputs {
-                push_item(&mut out, meshes, *ing, origin, right, up, fwd, x, y, 0.07);
+                push_item(&mut out, meshes, (*ing).into(), origin, right, up, fwd, x, y, 0.07);
                 x += 0.10;
             }
             push_item(

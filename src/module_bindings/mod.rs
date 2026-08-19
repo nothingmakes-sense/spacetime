@@ -6,15 +6,39 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+pub mod craft_reducer;
+pub mod drop_selected_reducer;
+pub mod inventory_table;
+pub mod inventory_type;
+pub mod pickup_loot_reducer;
 pub mod player_table;
 pub mod player_type;
+pub mod select_slot_reducer;
 pub mod set_name_reducer;
+pub mod station_table;
+pub mod station_type;
+pub mod swap_slots_reducer;
+pub mod transfer_station_reducer;
 pub mod update_transform_reducer;
+pub mod world_loot_table;
+pub mod world_loot_type;
 
+pub use craft_reducer::craft;
+pub use drop_selected_reducer::drop_selected;
+pub use inventory_table::*;
+pub use inventory_type::Inventory;
+pub use pickup_loot_reducer::pickup_loot;
 pub use player_table::*;
 pub use player_type::Player;
+pub use select_slot_reducer::select_slot;
 pub use set_name_reducer::set_name;
+pub use station_table::*;
+pub use station_type::Station;
+pub use swap_slots_reducer::swap_slots;
+pub use transfer_station_reducer::transfer_station;
 pub use update_transform_reducer::update_transform;
+pub use world_loot_table::*;
+pub use world_loot_type::WorldLoot;
 
 #[derive(Clone, PartialEq, Debug)]
 
@@ -24,8 +48,35 @@ pub use update_transform_reducer::update_transform;
 /// to indicate which reducer caused the event.
 
 pub enum Reducer {
-    SetName { name: String },
-    UpdateTransform { x: f32, y: f32, z: f32, rot_y: f32 },
+    Craft {
+        recipe_id: u16,
+    },
+    DropSelected,
+    PickupLoot {
+        loot_id: u64,
+    },
+    SelectSlot {
+        slot: u8,
+    },
+    SetName {
+        name: String,
+    },
+    SwapSlots {
+        a: u8,
+        b: u8,
+    },
+    TransferStation {
+        station_id: u64,
+        bag_slot: u8,
+        st_slot: u8,
+        to_station: bool,
+    },
+    UpdateTransform {
+        x: f32,
+        y: f32,
+        z: f32,
+        rot_y: f32,
+    },
 }
 
 impl __sdk::InModule for Reducer {
@@ -35,7 +86,13 @@ impl __sdk::InModule for Reducer {
 impl __sdk::Reducer for Reducer {
     fn reducer_name(&self) -> &'static str {
         match self {
+            Reducer::Craft { .. } => "craft",
+            Reducer::DropSelected => "drop_selected",
+            Reducer::PickupLoot { .. } => "pickup_loot",
+            Reducer::SelectSlot { .. } => "select_slot",
             Reducer::SetName { .. } => "set_name",
+            Reducer::SwapSlots { .. } => "swap_slots",
+            Reducer::TransferStation { .. } => "transfer_station",
             Reducer::UpdateTransform { .. } => "update_transform",
             _ => unreachable!(),
         }
@@ -43,9 +100,40 @@ impl __sdk::Reducer for Reducer {
     #[allow(clippy::clone_on_copy)]
     fn args_bsatn(&self) -> Result<Vec<u8>, __sats::bsatn::EncodeError> {
         match self {
+            Reducer::Craft { recipe_id } => __sats::bsatn::to_vec(&craft_reducer::CraftArgs {
+                recipe_id: recipe_id.clone(),
+            }),
+            Reducer::DropSelected => {
+                __sats::bsatn::to_vec(&drop_selected_reducer::DropSelectedArgs {})
+            }
+            Reducer::PickupLoot { loot_id } => {
+                __sats::bsatn::to_vec(&pickup_loot_reducer::PickupLootArgs {
+                    loot_id: loot_id.clone(),
+                })
+            }
+            Reducer::SelectSlot { slot } => {
+                __sats::bsatn::to_vec(&select_slot_reducer::SelectSlotArgs { slot: slot.clone() })
+            }
             Reducer::SetName { name } => {
                 __sats::bsatn::to_vec(&set_name_reducer::SetNameArgs { name: name.clone() })
             }
+            Reducer::SwapSlots { a, b } => {
+                __sats::bsatn::to_vec(&swap_slots_reducer::SwapSlotsArgs {
+                    a: a.clone(),
+                    b: b.clone(),
+                })
+            }
+            Reducer::TransferStation {
+                station_id,
+                bag_slot,
+                st_slot,
+                to_station,
+            } => __sats::bsatn::to_vec(&transfer_station_reducer::TransferStationArgs {
+                station_id: station_id.clone(),
+                bag_slot: bag_slot.clone(),
+                st_slot: st_slot.clone(),
+                to_station: to_station.clone(),
+            }),
             Reducer::UpdateTransform { x, y, z, rot_y } => {
                 __sats::bsatn::to_vec(&update_transform_reducer::UpdateTransformArgs {
                     x: x.clone(),
@@ -63,7 +151,10 @@ impl __sdk::Reducer for Reducer {
 #[allow(non_snake_case)]
 #[doc(hidden)]
 pub struct DbUpdate {
+    inventory: __sdk::TableUpdate<Inventory>,
     player: __sdk::TableUpdate<Player>,
+    station: __sdk::TableUpdate<Station>,
+    world_loot: __sdk::TableUpdate<WorldLoot>,
 }
 
 impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
@@ -72,9 +163,18 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
         let mut db_update = DbUpdate::default();
         for table_update in __sdk::transaction_update_iter_table_updates(raw) {
             match &table_update.table_name[..] {
+                "inventory" => db_update
+                    .inventory
+                    .append(inventory_table::parse_table_update(table_update)?),
                 "player" => db_update
                     .player
                     .append(player_table::parse_table_update(table_update)?),
+                "station" => db_update
+                    .station
+                    .append(station_table::parse_table_update(table_update)?),
+                "world_loot" => db_update
+                    .world_loot
+                    .append(world_loot_table::parse_table_update(table_update)?),
 
                 unknown => {
                     return Err(__sdk::InternalError::unknown_name(
@@ -101,9 +201,18 @@ impl __sdk::DbUpdate for DbUpdate {
     ) -> AppliedDiff<'_> {
         let mut diff = AppliedDiff::default();
 
+        diff.inventory = cache
+            .apply_diff_to_table::<Inventory>("inventory", &self.inventory)
+            .with_updates_by_pk(|row| &row.owner);
         diff.player = cache
             .apply_diff_to_table::<Player>("player", &self.player)
             .with_updates_by_pk(|row| &row.identity);
+        diff.station = cache
+            .apply_diff_to_table::<Station>("station", &self.station)
+            .with_updates_by_pk(|row| &row.id);
+        diff.world_loot = cache
+            .apply_diff_to_table::<WorldLoot>("world_loot", &self.world_loot)
+            .with_updates_by_pk(|row| &row.id);
 
         diff
     }
@@ -111,8 +220,17 @@ impl __sdk::DbUpdate for DbUpdate {
         let mut db_update = DbUpdate::default();
         for table_rows in raw.tables {
             match &table_rows.table[..] {
+                "inventory" => db_update
+                    .inventory
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "player" => db_update
                     .player
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "station" => db_update
+                    .station
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "world_loot" => db_update
+                    .world_loot
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 unknown => {
                     return Err(
@@ -127,8 +245,17 @@ impl __sdk::DbUpdate for DbUpdate {
         let mut db_update = DbUpdate::default();
         for table_rows in raw.tables {
             match &table_rows.table[..] {
+                "inventory" => db_update
+                    .inventory
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "player" => db_update
                     .player
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "station" => db_update
+                    .station
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "world_loot" => db_update
+                    .world_loot
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 unknown => {
                     return Err(
@@ -145,7 +272,10 @@ impl __sdk::DbUpdate for DbUpdate {
 #[allow(non_snake_case)]
 #[doc(hidden)]
 pub struct AppliedDiff<'r> {
+    inventory: __sdk::TableAppliedDiff<'r, Inventory>,
     player: __sdk::TableAppliedDiff<'r, Player>,
+    station: __sdk::TableAppliedDiff<'r, Station>,
+    world_loot: __sdk::TableAppliedDiff<'r, WorldLoot>,
     __unused: std::marker::PhantomData<&'r ()>,
 }
 
@@ -159,7 +289,10 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         event: &EventContext,
         callbacks: &mut __sdk::DbCallbacks<RemoteModule>,
     ) {
+        callbacks.invoke_table_row_callbacks::<Inventory>("inventory", &self.inventory, event);
         callbacks.invoke_table_row_callbacks::<Player>("player", &self.player, event);
+        callbacks.invoke_table_row_callbacks::<Station>("station", &self.station, event);
+        callbacks.invoke_table_row_callbacks::<WorldLoot>("world_loot", &self.world_loot, event);
     }
 }
 
@@ -820,7 +953,11 @@ impl __sdk::SpacetimeModule for RemoteModule {
     type QueryBuilder = __sdk::QueryBuilder;
 
     fn register_tables(client_cache: &mut __sdk::ClientCache<Self>) {
+        inventory_table::register_table(client_cache);
         player_table::register_table(client_cache);
+        station_table::register_table(client_cache);
+        world_loot_table::register_table(client_cache);
     }
-    const ALL_TABLE_NAMES: &'static [&'static str] = &["player"];
+    const ALL_TABLE_NAMES: &'static [&'static str] =
+        &["inventory", "player", "station", "world_loot"];
 }

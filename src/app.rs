@@ -21,6 +21,7 @@ use crate::config::*;
 use crate::game_mode::GameMode;
 use crate::hud::{self, ItemMeshes};
 use crate::input::InputState;
+#[allow(unused_imports)]
 use crate::items::{
     selected_recipe, ItemStore, ItemUi, WorldSync, BAG_SLOTS, HOTBAR,
 };

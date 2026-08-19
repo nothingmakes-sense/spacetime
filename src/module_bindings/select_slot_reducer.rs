@@ -6,55 +6,44 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct UpdateTransformArgs {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-    pub rot_y: f32,
+pub(super) struct SelectSlotArgs {
+    pub slot: u8,
 }
 
-impl From<UpdateTransformArgs> for super::Reducer {
-    fn from(args: UpdateTransformArgs) -> Self {
-        Self::UpdateTransform {
-            x: args.x,
-            y: args.y,
-            z: args.z,
-            rot_y: args.rot_y,
-        }
+impl From<SelectSlotArgs> for super::Reducer {
+    fn from(args: SelectSlotArgs) -> Self {
+        Self::SelectSlot { slot: args.slot }
     }
 }
 
-impl __sdk::InModule for UpdateTransformArgs {
+impl __sdk::InModule for SelectSlotArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `update_transform`.
+/// Extension trait for access to the reducer `select_slot`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait update_transform {
-    /// Request that the remote module invoke the reducer `update_transform` to run as soon as possible.
+pub trait select_slot {
+    /// Request that the remote module invoke the reducer `select_slot` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`update_transform:update_transform_then`] to run a callback after the reducer completes.
-    fn update_transform(&self, x: f32, y: f32, z: f32, rot_y: f32) -> __sdk::Result<()> {
-        self.update_transform_then(x, y, z, rot_y, |_, _| {})
+    /// /// Use [`select_slot:select_slot_then`] to run a callback after the reducer completes.
+    fn select_slot(&self, slot: u8) -> __sdk::Result<()> {
+        self.select_slot_then(slot, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `update_transform` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `select_slot` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn update_transform_then(
+    fn select_slot_then(
         &self,
-        x: f32,
-        y: f32,
-        z: f32,
-        rot_y: f32,
+        slot: u8,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -62,19 +51,16 @@ pub trait update_transform {
     ) -> __sdk::Result<()>;
 }
 
-impl update_transform for super::RemoteReducers {
-    fn update_transform_then(
+impl select_slot for super::RemoteReducers {
+    fn select_slot_then(
         &self,
-        x: f32,
-        y: f32,
-        z: f32,
-        rot_y: f32,
+        slot: u8,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(UpdateTransformArgs { x, y, z, rot_y }, callback)
+            .invoke_reducer_with_callback(SelectSlotArgs { slot }, callback)
     }
 }
