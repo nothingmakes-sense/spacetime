@@ -6,37 +6,41 @@
 //! so the chase camera and the player mesh never disagree.
 
 use anyhow::{Context, Result};
-use glam::{Mat4, Vec3};
+use glam::{IVec3, Mat4, Vec3};
 use log::{error, info, warn};
 use std::sync::Arc;
 use std::time::Instant;
 use winit::{
     application::ApplicationHandler,
-    dpi::LogicalSize,
+    dpi::PhysicalSize,
     event::{DeviceEvent, DeviceId, ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::ActiveEventLoop,
     keyboard::{KeyCode, PhysicalKey},
-    window::{CursorGrabMode, Window, WindowId},
+    window::{CursorGrabMode, Fullscreen, Window, WindowId},
 };
 
 use crate::anim::AnimLibrary;
 use crate::assets::{
-    chest_parts, furnace_parts, ground_plane, unit_box, workbench_model, AdventurerClass,
-    AssetManager, ANIM_GENERAL, ANIM_MOVEMENT, GROUND_HALF_EXTENT,
+    chest_parts, furnace_parts, ground_plane, material_lib, unit_box, workbench_model, AdventurerClass,
+    AssetManager, ANIM_GENERAL, ANIM_MOVEMENT,
 };
 use crate::config::*;
 use crate::game_mode::GameMode;
-use crate::hud::{self, DebugSnap, ItemMeshes};
+use crate::hud::{self, DebugSnap, HudHit, ItemMeshes};
 use crate::input::InputState;
 #[allow(unused_imports)]
 use crate::items::{
-    selected_recipe, ItemStore, ItemUi, WorldSync, BAG_SLOTS, HOTBAR, STATION_RANGE,
+    selected_recipe, InvTab, ItemStore, ItemUi, WorldSync, BAG_SLOTS, HOTBAR, STATION_RANGE,
 };
 use crate::objects::{AttachedItem, CharacterObject, PropObject};
+use crate::pause::{pause_draws, PauseMenu, PausePage, PauseResult};
 use crate::physics::PhysicsWorld;
-use crate::player::{character_model_matrix, Player};
+use crate::player::{character_model_matrix, look_forward, Player};
+use crate::rpg::SkillId;
 use crate::scene::{Object, Scene, TickCtx};
+use crate::settings::Settings;
 use crate::vulkan::VulkanContext;
+use crate::voxel::{surface_at, Chunk, CHUNK_SIZE, WORLD_SEED};
 use crate::module_bindings::PlayerTableAccess;
 use spacetimedb_sdk::Table;
 
@@ -54,6 +58,10 @@ pub struct App {
     item_ui: ItemUi,
     item_meshes: Option<ItemMeshes>,
     world_sync: WorldSync,
+    settings: Settings,
+    pause: PauseMenu,
+    voxel_draws: Vec<(crate::vulkan::ModelHandle, glam::Mat4)>,
+    exit_requested: bool,
 
     last_frame: Instant,
     accumulator: f32,
@@ -78,6 +86,10 @@ impl App {
             item_ui: ItemUi::default(),
             item_meshes: None,
             world_sync: WorldSync::new(),
+            settings: Settings::load(),
+            pause: PauseMenu::default(),
+            voxel_draws: Vec::new(),
+            exit_requested: false,
             last_frame: Instant::now(),
             accumulator: 0.0,
             fps: 60.0,
@@ -98,8 +110,48 @@ impl App {
         }
     }
 
+    fn apply_display(&mut self) {
+        let Some(w) = self.window.clone() else {
+            return;
+        };
+        Self::apply_display_to(&self.settings, &w);
+    }
+
+    fn apply_display_to(settings: &Settings, w: &Window) {
+        if settings.fullscreen {
+            w.set_fullscreen(Some(Fullscreen::Borderless(None)));
+        } else {
+            w.set_fullscreen(None);
+            let _ = w.request_inner_size(PhysicalSize::new(settings.width, settings.height));
+        }
+    }
+
+    fn apply_graphics(&mut self) {
+        if let Some(vk) = &mut self.vulkan {
+            vk.set_vsync(self.settings.vsync);
+        }
+    }
+
+    fn open_pause(&mut self) {
+        self.close_all_ui();
+        self.pause.open = true;
+        self.pause.page = PausePage::Root;
+        self.pause.waiting = None;
+        self.input.mouse_captured = false;
+        self.set_cursor_captured(false);
+    }
+
+    fn close_pause(&mut self) {
+        self.pause.close();
+        self.input.mouse_captured = true;
+        self.set_cursor_captured(true);
+    }
+
     fn init_after_window(&mut self, window: Arc<Window>) -> Result<()> {
-        let mut vulkan = VulkanContext::new(window.clone()).context("Vulkan initialization failed")?;
+        Self::apply_display_to(&self.settings, &window);
+
+        let mut vulkan = VulkanContext::new(window.clone(), self.settings.vsync)
+            .context("Vulkan initialization failed")?;
 
         if let Err(e) = self.anim_lib.load_file(crate::assets::resolve_asset(ANIM_GENERAL)) {
             warn!("general anim pack: {e:#}");
@@ -109,16 +161,55 @@ impl App {
         }
         info!("animation library: {} clips", self.anim_lib.len());
 
-        self.ground = Some(vulkan.upload_model(&ground_plane(GROUND_HALF_EXTENT, 12.0))?);
+        let mats = material_lib::MatCache::load();
+        let grass = mats.or_solid("grass", [0x4a, 0x6b, 0x3a, 0xff]);
+        // Wide skirt under the voxel ring so the horizon is not a void.
+        self.ground = Some(vulkan.upload_model(&material_lib::textured_ground(80.0, 40.0, grass))?);
 
-        let crate_mesh = vulkan.upload_model(&unit_box([0.55, 0.38, 0.22, 1.0]))?;
-        let (chest_body_cpu, chest_lid_cpu) = chest_parts();
-        let (furnace_cpu, ember_cpu) = furnace_parts();
-        let chest_body = vulkan.upload_model(&chest_body_cpu)?;
-        let chest_lid = vulkan.upload_model(&chest_lid_cpu)?;
-        let furnace = vulkan.upload_model(&furnace_cpu)?;
+        let wood_px = mats.or_solid("wood", [0x8a, 0x5a, 0x2b, 0xff]);
+        let brick_px = mats.or_solid("brick", [0x8a, 0x3a, 0x28, 0xff]);
+        let crate_mesh = vulkan.upload_model(&material_lib::textured_box(
+            1.0,
+            1.0,
+            1.0,
+            wood_px.clone(),
+            "crate",
+        ))?;
+        let chest_body = vulkan.upload_model(&material_lib::textured_box(
+            0.80,
+            0.45,
+            0.55,
+            wood_px.clone(),
+            "chest_body",
+        ))?;
+        let mut lid = material_lib::textured_box(0.82, 0.06, 0.57, wood_px.clone(), "chest_lid");
+        for mesh in &mut lid.meshes {
+            for v in &mut mesh.vertices {
+                v.position[1] += 0.45;
+            }
+        }
+        let chest_lid = vulkan.upload_model(&lid)?;
+        let furnace = vulkan.upload_model(&material_lib::textured_box(
+            0.72,
+            1.05,
+            0.72,
+            brick_px,
+            "furnace",
+        ))?;
+        let ember_cpu = {
+            let (_, ember) = furnace_parts();
+            ember
+        };
         let ember = vulkan.upload_model(&ember_cpu)?;
-        let workbench = vulkan.upload_model(&workbench_model())?;
+        let thatch = mats.or_solid("planks", [0x7a, 0x52, 0x28, 0xff]);
+        let workbench = vulkan.upload_model(&material_lib::textured_box(
+            1.35,
+            0.78,
+            0.75,
+            thatch,
+            "workbench",
+        ))?;
+        let _ = (chest_parts, ground_plane, unit_box, workbench_model);
 
         self.item_meshes = Some(ItemMeshes::upload(
             &mut vulkan,
@@ -127,7 +218,28 @@ impl App {
             furnace,
             ember,
             workbench,
+            &mats,
         )?);
+
+        let surface = surface_at(0, 0, WORLD_SEED) as f32;
+        for cz in -1..=1 {
+            for cx in -1..=1 {
+                let chunk = Chunk::from_height(IVec3::new(cx, 0, cz), WORLD_SEED);
+                let model = chunk.mesh_textured(|b| mats.block(b).cloned());
+                match vulkan.upload_model(&model) {
+                    Ok(h) => {
+                        let t = Mat4::from_translation(Vec3::new(
+                            cx as f32 * CHUNK_SIZE as f32,
+                            -surface,
+                            cz as f32 * CHUNK_SIZE as f32,
+                        ));
+                        self.voxel_draws.push((h, t));
+                    }
+                    Err(e) => warn!("voxel chunk ({cx},{cz}): {e:#}"),
+                }
+            }
+        }
+        info!("voxel terrain: {} chunks (Material-LIB albedo)", self.voxel_draws.len());
 
         self.spawn_character(
             &mut vulkan,
@@ -161,7 +273,6 @@ impl App {
             info!("Single-player world ready ({} props)", world.entities.len());
         }
 
-        // Blockers for the default stations (same layout in both modes).
         for (kind, x, y, z, _) in crate::items::DEFAULT_STATIONS {
             let (hx, hy, hz) = kind.half_extents();
             self.physics
@@ -180,7 +291,7 @@ impl App {
         self.vulkan = Some(vulkan);
 
         info!(
-            "Controls: WASD · Shift run · hold Space jump · C/F sit · Q/LMB swing · E use · Tab bag · G drop · R craft · T/Y transfer · Esc mouse"
+            "Controls: WASD · Shift run · hold Space jump · Tab bag · Esc pause · E use · RMB place/eat"
         );
         Ok(())
     }
@@ -226,6 +337,42 @@ impl App {
         Ok(())
     }
 
+    fn sync_mouse_ndc(&mut self) {
+        if let Some(w) = &self.window {
+            let size = w.inner_size();
+            self.item_ui.set_mouse_pixels(
+                self.input.mouse_x,
+                self.input.mouse_y,
+                size.width as f32,
+                size.height as f32,
+            );
+        }
+    }
+
+    fn handle_pause_input(&mut self, edges: &crate::input::InputEdges) {
+        self.sync_mouse_ndc();
+        let (mx, my) = self.item_ui.mouse_ndc;
+        self.pause.hover = self.pause.hit(&self.settings, mx, my);
+        if !edges.lmb {
+            return;
+        }
+        let Some(hit) = self.pause.hover else {
+            return;
+        };
+        match self.pause.click(&mut self.settings, hit) {
+            PauseResult::None => {}
+            PauseResult::Resume => {
+                self.input.mouse_captured = true;
+                self.set_cursor_captured(true);
+            }
+            PauseResult::Exit => {
+                self.exit_requested = true;
+            }
+            PauseResult::ApplyDisplay => self.apply_display(),
+            PauseResult::ApplyGraphics => self.apply_graphics(),
+        }
+    }
+
     fn handle_item_input(&mut self, edges: &crate::input::InputEdges) {
         let pos = self.player.position;
         let yaw = self.player.yaw;
@@ -233,13 +380,14 @@ impl App {
         if edges.inventory {
             self.item_ui.toggle_bag();
             if self.item_ui.bag_open {
-                // Free the cursor so the player can click slots. WASD stays live.
                 self.input.mouse_captured = false;
                 self.set_cursor_captured(false);
             } else {
                 self.item_ui.cancel_drag();
                 self.mode.items().close_station();
                 self.item_ui.on_station_closed();
+                self.input.mouse_captured = true;
+                self.set_cursor_captured(true);
             }
         }
 
@@ -247,24 +395,36 @@ impl App {
             self.item_ui.debug = !self.item_ui.debug;
         }
 
-        // Click-to-move: LMB whole stack, RMB one item. Works on the hotbar
-        // even when the bag is closed, as long as the cursor is free.
-        if (edges.lmb || edges.rmb) && (self.item_ui.bag_open || !self.input.mouse_captured) {
-            if let Some(w) = &self.window {
-                let size = w.inner_size();
-                self.item_ui.set_mouse_pixels(
-                    self.input.mouse_x,
-                    self.input.mouse_y,
-                    size.width as f32,
-                    size.height as f32,
-                );
-            }
+        let cursor_free = self.item_ui.bag_open || !self.input.mouse_captured;
+        if (edges.lmb || edges.rmb) && cursor_free {
+            self.sync_mouse_ndc();
             let view = self.mode.items().view();
-            if let Some(slot) = hud::hit_slot(&view, self.item_ui.bag_open, self.item_ui.mouse_ndc.0, self.item_ui.mouse_ndc.1)
-            {
-                self.item_ui.click_slot(self.mode.items(), slot, edges.rmb);
-            } else if edges.lmb && !self.item_ui.held.is_empty() {
-                self.item_ui.cancel_drag();
+            match hud::hit(&view, &self.item_ui, self.item_ui.mouse_ndc.0, self.item_ui.mouse_ndc.1) {
+                Some(HudHit::Tab(t)) if edges.lmb => {
+                    self.item_ui.tab = t;
+                }
+                Some(HudHit::StatPlus(i)) if edges.lmb => {
+                    self.mode.items().spend_stat(i);
+                }
+                Some(HudHit::Craft) if edges.lmb => {
+                    if let Some(r) = selected_recipe(&view) {
+                        self.mode.items().craft(r.id);
+                    }
+                }
+                Some(HudHit::Recipe(i)) if edges.lmb => {
+                    self.mode.items().set_recipe_index(i as usize);
+                }
+                Some(HudHit::SelectBag(i)) if edges.lmb => {
+                    self.mode.items().select(i);
+                }
+                Some(HudHit::Slot(slot)) => {
+                    self.item_ui.click_slot(self.mode.items(), slot, edges.rmb);
+                }
+                _ => {
+                    if edges.lmb && !self.item_ui.held.is_empty() {
+                        self.item_ui.cancel_drag();
+                    }
+                }
             }
         }
 
@@ -322,7 +482,30 @@ impl App {
             self.mode.items().transfer_selected(false);
         }
 
-        // Walk-over pickup.
+        // World RMB: eat or place a block.
+        if edges.rmb && self.input.mouse_captured && !self.item_ui.bag_open {
+            let sel = self.mode.items().view().selected_stack();
+            if sel.item.is_food() {
+                self.mode.items().consume_selected();
+            } else if sel.item.def().place != 0 {
+                let dir = look_forward(yaw);
+                let p = pos + dir * 2.2;
+                self.mode.items().place_build(Vec3::new(p.x, 0.0, p.z));
+            }
+        }
+
+        if edges.attack && !self.item_ui.bag_open {
+            let sel = self.mode.items().view().selected_stack();
+            let removed = if sel.item.def().place != 0 || sel.item.def().tool {
+                self.mode.items().remove_nearest_build(pos, 3.2)
+            } else {
+                false
+            };
+            if !removed {
+                self.mode.items().add_skill_xp(SkillId::Combat as u8, 3);
+            }
+        }
+
         self.mode.items().pickup_nearest(pos);
 
         if self.mode.items().view().open_station.is_some() {
@@ -345,6 +528,9 @@ impl App {
     /// body and chase camera advance together (no 60 Hz pose snap).
     fn drive_player(&mut self, dt: f32) {
         self.player.update_movement(&self.input, dt);
+        let spd = self.mode.items().view().hero.speed_mult();
+        self.player.velocity.x *= spd;
+        self.player.velocity.z *= spd;
         self.physics.set_wish_horizontal(
             self.player.velocity.x,
             self.player.velocity.z,
@@ -367,6 +553,12 @@ impl App {
 
     fn update(&mut self, dt: f32) {
         let edges = self.input.consume_edges();
+
+        if self.pause.open {
+            self.handle_pause_input(&edges);
+            return;
+        }
+
         if edges.sit {
             self.player.sitting = !self.player.sitting;
         }
@@ -374,12 +566,14 @@ impl App {
         self.handle_item_input(&edges);
 
         {
-            let view = self.mode.items().view();
-            if let Some(st) = view.open_station_view() {
-                if self.player.position.distance(st.pos) > STATION_RANGE {
-                    drop(view);
-                    self.close_all_ui();
-                }
+            let too_far = {
+                let view = self.mode.items().view();
+                view.open_station_view()
+                    .map(|st| self.player.position.distance(st.pos) > STATION_RANGE)
+                    .unwrap_or(false)
+            };
+            if too_far {
+                self.close_all_ui();
             }
         }
 
@@ -400,8 +594,8 @@ impl App {
                 sprinting: self.input.sprint,
                 jump: self.input.jump,
                 sit_toggle: edges.sit,
-                attack: edges.attack,
-                interact: edges.interact,
+                attack: edges.attack && !self.item_ui.bag_open,
+                interact: edges.interact && !self.item_ui.bag_open,
                 library: &self.anim_lib,
                 items: self.mode.items(),
                 item_view: &item_view,
@@ -468,10 +662,21 @@ impl App {
 
         vk.begin_frame()?;
         vk.update_camera_ubo(view, proj, eye);
-        vk.update_light_ubo(Vec3::new(12.0, 22.0, 8.0), Vec3::new(1.0, 0.96, 0.88), 0.22, 0.35, 28.0);
+        let (amb, spec, shine) = self.settings.quality.light();
+        let bright = self.settings.brightness_mul();
+        vk.update_light_ubo(
+            Vec3::new(12.0, 22.0, 8.0),
+            Vec3::new(1.0, 0.96, 0.88) * bright,
+            amb,
+            spec,
+            shine,
+        );
 
         if let Some(g) = self.ground {
-            vk.draw_model(g, Mat4::IDENTITY)?;
+            vk.draw_model(g, Mat4::from_translation(Vec3::new(0.0, -0.04, 0.0)))?;
+        }
+        for &(handle, model) in &self.voxel_draws {
+            vk.draw_model(handle, model)?;
         }
 
         for node in &self.scene.nodes {
@@ -489,12 +694,18 @@ impl App {
         }
 
         if let Some(meshes) = &self.item_meshes {
-            let item_view = self.mode.items().view();
             self.item_ui.set_mouse_pixels(
                 self.input.mouse_x,
                 self.input.mouse_y,
                 size.width as f32,
                 size.height as f32,
+            );
+            let item_view = self.mode.items().view();
+            self.item_ui.hover = hud::hit_slot(
+                &item_view,
+                &self.item_ui,
+                self.item_ui.mouse_ndc.0,
+                self.item_ui.mouse_ndc.1,
             );
             let debug = self.item_ui.debug.then_some(DebugSnap {
                 fps: self.fps,
@@ -512,8 +723,20 @@ impl App {
                 multiplayer: matches!(self.mode, GameMode::Multiplayer { .. }),
             });
             vk.begin_overlay();
-            for draw in hud::hud_draws(meshes, &item_view, &self.item_ui, debug.as_ref()) {
-                vk.draw_model(draw.handle, draw.model)?;
+            if !self.pause.open {
+                for draw in hud::hud_draws(meshes, &item_view, &self.item_ui, debug.as_ref()) {
+                    vk.draw_model(draw.handle, draw.model)?;
+                }
+            }
+            if self.pause.open {
+                self.pause.hover = self.pause.hit(
+                    &self.settings,
+                    self.item_ui.mouse_ndc.0,
+                    self.item_ui.mouse_ndc.1,
+                );
+                for draw in pause_draws(meshes, &self.pause, &self.settings, self.pause.hover) {
+                    vk.draw_model(draw.handle, draw.model)?;
+                }
             }
         }
 
@@ -530,7 +753,7 @@ impl ApplicationHandler for App {
 
         let attrs = Window::default_attributes()
             .with_title(WINDOW_TITLE)
-            .with_inner_size(LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT));
+            .with_inner_size(PhysicalSize::new(self.settings.width, self.settings.height));
 
         match event_loop.create_window(attrs) {
             Ok(window) => {
@@ -541,7 +764,7 @@ impl ApplicationHandler for App {
                     return;
                 }
                 self.window = Some(window);
-                info!("Window ready — click to look, Esc releases the mouse");
+                info!("Window ready — click to look, Esc opens pause");
             }
             Err(e) => {
                 error!("Failed to create window: {e}");
@@ -564,6 +787,9 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
+                if self.pause.open {
+                    return;
+                }
                 let y = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => p.y as f32,
@@ -577,7 +803,7 @@ impl ApplicationHandler for App {
                 let pressed = state == ElementState::Pressed;
                 match button {
                     MouseButton::Left => {
-                        if self.item_ui.bag_open {
+                        if self.pause.open || self.item_ui.bag_open {
                             self.input.set_lmb(pressed);
                         } else if pressed && !self.input.mouse_captured {
                             self.input.mouse_captured = true;
@@ -601,15 +827,37 @@ impl ApplicationHandler for App {
             } => {
                 let pressed = state == ElementState::Pressed;
                 if code == KeyCode::Escape && pressed {
-                    if self.item_ui.bag_open || self.mode.items().view().open_station.is_some() {
+                    if self.pause.waiting.is_some() {
+                        self.pause.waiting = None;
+                    } else if self.pause.open {
+                        if self.pause.page != PausePage::Root {
+                            self.pause.page = PausePage::Root;
+                            self.pause.waiting = None;
+                        } else {
+                            self.close_pause();
+                        }
+                    } else if self.item_ui.bag_open
+                        || self.mode.items().view().open_station.is_some()
+                    {
                         self.close_all_ui();
+                        self.input.mouse_captured = true;
+                        self.set_cursor_captured(true);
                     } else {
-                        self.input.toggle_mouse_capture();
-                        self.set_cursor_captured(self.input.mouse_captured);
+                        self.open_pause();
                     }
-                } else {
-                    self.input.handle_key(code, pressed);
+                    return;
                 }
+
+                if self.pause.open {
+                    if pressed && self.pause.waiting.is_some() {
+                        self.pause.capture_rebind(&mut self.settings, code);
+                    } else if !pressed {
+                        self.input.handle_key(&self.settings, code, false);
+                    }
+                    return;
+                }
+
+                self.input.handle_key(&self.settings, code, pressed);
             }
             _ => {}
         }
@@ -622,13 +870,20 @@ impl ApplicationHandler for App {
         event: DeviceEvent,
     ) {
         if let DeviceEvent::MouseMotion { delta } = event {
-            if self.input.mouse_captured && !self.item_ui.bag_open {
-                self.player.apply_look(delta.0, delta.1);
+            if self.input.mouse_captured && !self.item_ui.bag_open && !self.pause.open {
+                self.player
+                    .apply_look(delta.0, delta.1, self.settings.mouse_sensitivity());
             }
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.exit_requested {
+            info!("Exit from pause menu");
+            event_loop.exit();
+            return;
+        }
+
         let now = Instant::now();
         let frame_time = (now - self.last_frame).as_secs_f32().min(MAX_FRAME_TIME);
         self.last_frame = now;
@@ -639,12 +894,17 @@ impl ApplicationHandler for App {
             self.fps
         };
 
-        self.step_locomotion(frame_time);
-
-        self.accumulator += frame_time;
-        while self.accumulator >= FIXED_DT {
+        if !self.pause.open {
+            self.step_locomotion(frame_time);
+            self.accumulator += frame_time;
+            while self.accumulator >= FIXED_DT {
+                self.update(FIXED_DT);
+                self.accumulator -= FIXED_DT;
+            }
+        } else {
+            // Still consume click edges so the menu stays responsive.
+            self.accumulator = 0.0;
             self.update(FIXED_DT);
-            self.accumulator -= FIXED_DT;
         }
 
         if let Err(e) = self.render() {

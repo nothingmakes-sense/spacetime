@@ -225,6 +225,10 @@ impl ItemStore for Multiplayer {
         self.ui.recipe_cursor = cur.rem_euclid(n as i32) as usize;
     }
 
+    fn set_recipe_index(&mut self, i: usize) {
+        self.ui.recipe_cursor = i;
+    }
+
     fn toggle_station(&mut self, id: u64) -> bool {
         if self.ui.open_station == Some(id) {
             self.ui.open_station = None;
@@ -274,6 +278,79 @@ impl ItemStore for Multiplayer {
                 self.log("move through the bag first");
                 false
             }
+            (SlotRef::Equip(_), _) | (_, SlotRef::Equip(_)) => {
+                // Equipment is client-side in multiplayer this pass.
+                let from_s = self.peek_slot(from);
+                let to_s = self.peek_slot(to);
+                match (from, to) {
+                    (SlotRef::Equip(i), SlotRef::Bag(_)) => {
+                        self.ui.equip[i] = to_s;
+                        true
+                    }
+                    (SlotRef::Bag(_), SlotRef::Equip(i)) => {
+                        if from_s.item.def().equip.slot_index() == Some(i) {
+                            self.ui.equip[i] = from_s;
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
+                }
+            }
         }
+    }
+
+    fn spend_stat(&mut self, stat: u8) -> bool {
+        let Some(id) = crate::rpg::StatId::from_u8(stat) else {
+            return false;
+        };
+        self.ui.hero.spend(id)
+    }
+
+    fn add_skill_xp(&mut self, skill: u8, xp: u32) {
+        if let Some(id) = crate::rpg::SkillId::from_u8(skill) {
+            self.ui.hero.add_skill_xp(id, xp);
+        }
+    }
+
+    fn consume_selected(&mut self) -> bool {
+        false
+    }
+
+    fn place_build(&mut self, pos: glam::Vec3) -> bool {
+        let view = self.view();
+        let stack = view.selected_stack();
+        if stack.is_empty() || stack.item.def().place == 0 {
+            return false;
+        }
+        let id = (self.ui.builds.len() as u64) + 1;
+        self.ui.builds.push(crate::rpg::BuildPiece {
+            id,
+            item: stack.item,
+            pos,
+        });
+        self.ui.hero.add_skill_xp(crate::rpg::SkillId::Building, 8);
+        true
+    }
+
+    fn remove_nearest_build(&mut self, pos: glam::Vec3, range: f32) -> bool {
+        let Some((idx, _)) = self
+            .ui
+            .builds
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.pos.distance(pos) <= range)
+            .min_by(|a, b| {
+                a.1.pos
+                    .distance(pos)
+                    .partial_cmp(&b.1.pos.distance(pos))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+        else {
+            return false;
+        };
+        self.ui.builds.remove(idx);
+        true
     }
 }

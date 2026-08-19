@@ -26,6 +26,7 @@ impl SwapchainBundle {
         render_pass: vk::RenderPass,
         graphics_family: u32,
         present_family: u32,
+        vsync: bool,
         old: Option<vk::SwapchainKHR>,
     ) -> Result<Self> {
         let caps =
@@ -37,11 +38,7 @@ impl SwapchainBundle {
 
         let surface_format = pick_surface_format(&formats);
 
-        let present_mode = if present_modes.contains(&vk::PresentModeKHR::MAILBOX) {
-            vk::PresentModeKHR::MAILBOX
-        } else {
-            vk::PresentModeKHR::FIFO
-        };
+        let present_mode = pick_present_mode(&present_modes, vsync);
 
         let size = window.inner_size();
         let extent = vk::Extent2D {
@@ -123,6 +120,19 @@ impl SwapchainBundle {
         }
         memory::destroy_image(device, &self.depth);
         swapchain_loader.destroy_swapchain(self.swapchain, None);
+    }
+}
+
+pub fn pick_present_mode(modes: &[vk::PresentModeKHR], vsync: bool) -> vk::PresentModeKHR {
+    if vsync {
+        return vk::PresentModeKHR::FIFO;
+    }
+    if modes.contains(&vk::PresentModeKHR::MAILBOX) {
+        vk::PresentModeKHR::MAILBOX
+    } else if modes.contains(&vk::PresentModeKHR::IMMEDIATE) {
+        vk::PresentModeKHR::IMMEDIATE
+    } else {
+        vk::PresentModeKHR::FIFO
     }
 }
 

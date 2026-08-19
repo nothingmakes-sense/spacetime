@@ -11,7 +11,7 @@ mod stack;
 mod station;
 
 pub use catalog::{
-    ItemDef, ItemId, BAG_SLOTS, CATALOG, CHEST_SLOTS, FURNACE_SLOTS, HOTBAR, PICKUP_RANGE,
+    EquipKind, ItemDef, ItemId, BAG_SLOTS, CATALOG, CHEST_SLOTS, FURNACE_SLOTS, HOTBAR, PICKUP_RANGE,
     RESOURCE_BITS_DIR, STACK_MERGE_RANGE, STATION_RANGE,
 };
 pub use logic::{
@@ -54,4 +54,6 @@ pub const STARTER_KIT: &[(u16, u16)] = &[
     (ItemId::STICK.0, 4),
     (ItemId::COPPER_NUGGET.0, 3),
     (ItemId::WOOD_PLANK.0, 4),
+    (ItemId::TEXTILE.0, 6),
+    (ItemId::PICKAXE.0, 1),
 ];

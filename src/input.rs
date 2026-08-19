@@ -6,6 +6,8 @@
 
 use winit::keyboard::KeyCode;
 
+use crate::settings::{Action, Settings};
+
 #[derive(Default, Debug, Clone)]
 pub struct InputState {
     pub forward: bool,
@@ -57,31 +59,57 @@ pub struct InputState {
 }
 
 impl InputState {
-    pub fn handle_key(&mut self, code: KeyCode, pressed: bool) {
+    pub fn handle_key(&mut self, settings: &Settings, code: KeyCode, pressed: bool) {
+        if settings.matches(Action::Forward, code) {
+            self.forward = pressed;
+        }
+        if settings.matches(Action::Back, code) {
+            self.back = pressed;
+        }
+        if settings.matches(Action::Left, code) {
+            self.left = pressed;
+        }
+        if settings.matches(Action::Right, code) {
+            self.right = pressed;
+        }
+        if settings.matches(Action::Jump, code) {
+            self.jump = pressed;
+        }
+        if settings.matches(Action::Sprint, code) {
+            self.sprint = pressed;
+        }
+        if settings.matches(Action::Sit, code) {
+            self.sit = pressed;
+        }
+        if settings.matches(Action::Interact, code) {
+            self.interact = pressed;
+        }
+        if settings.matches(Action::Attack, code) {
+            self.attack = pressed;
+        }
+        if settings.matches(Action::Inventory, code) {
+            self.inventory = pressed;
+        }
+        if settings.matches(Action::Drop, code) {
+            self.drop = pressed;
+        }
+        if settings.matches(Action::Craft, code) {
+            self.craft = pressed;
+        }
+        if settings.matches(Action::Transfer, code) {
+            self.transfer = pressed;
+        }
+        if settings.matches(Action::Take, code) {
+            self.take = pressed;
+        }
+        if settings.matches(Action::RecipePrev, code) {
+            self.recipe_prev = pressed;
+        }
+        if settings.matches(Action::RecipeNext, code) {
+            self.recipe_next = pressed;
+        }
         match code {
-            KeyCode::KeyW => self.forward = pressed,
-            KeyCode::KeyS => self.back = pressed,
-            KeyCode::KeyA => self.left = pressed,
-            KeyCode::KeyD => self.right = pressed,
-            KeyCode::Space => self.jump = pressed,
-            KeyCode::ShiftLeft | KeyCode::ShiftRight => self.sprint = pressed,
-            KeyCode::KeyC | KeyCode::KeyF => self.sit = pressed,
-            KeyCode::KeyE => self.interact = pressed,
-            KeyCode::KeyQ => self.attack = pressed,
-            KeyCode::Tab | KeyCode::KeyI => self.inventory = pressed,
-            KeyCode::KeyG => self.drop = pressed,
-            KeyCode::KeyR => self.craft = pressed,
             KeyCode::F3 => self.debug = pressed,
-            KeyCode::KeyT => {
-                if self.sprint {
-                    self.take = pressed;
-                } else {
-                    self.transfer = pressed;
-                }
-            }
-            KeyCode::KeyY => self.take = pressed,
-            KeyCode::BracketLeft => self.recipe_prev = pressed,
-            KeyCode::BracketRight => self.recipe_next = pressed,
             KeyCode::ArrowLeft => self.cursor_left = pressed,
             KeyCode::ArrowRight => self.cursor_right = pressed,
             KeyCode::ArrowUp => self.cursor_up = pressed,

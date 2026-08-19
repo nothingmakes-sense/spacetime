@@ -5,10 +5,11 @@ use glam::Vec3;
 
 use super::{
     decode_slots, empty_bag, encode_slots, first_compatible, first_nonempty, insert_stack,
-    recipe_by_id, recipes_for, step_furnace, take_inputs, take_one, CraftStation, ItemId, Recipe,
-    SlotRole, Stack, StationKind, BAG_SLOTS, DEFAULT_LOOT, DEFAULT_STATIONS, PICKUP_RANGE,
+    recipe_by_id, recipes_for, step_furnace, take_inputs, take_one, CraftStation, EquipKind, ItemId,
+    Recipe, SlotRole, Stack, StationKind, BAG_SLOTS, DEFAULT_LOOT, DEFAULT_STATIONS, PICKUP_RANGE,
     STACK_MERGE_RANGE, STARTER_KIT, STATION_RANGE,
 };
+use crate::rpg::{empty_equip, harvest_skill, BuildPiece, Hero, SkillId, EQUIP_SLOTS};
 
 #[derive(Clone, Debug)]
 pub struct LootView {
@@ -37,6 +38,9 @@ pub struct ItemView {
     pub open_station: Option<u64>,
     pub recipe_cursor: usize,
     pub last_log: String,
+    pub equip: [Stack; EQUIP_SLOTS],
+    pub hero: Hero,
+    pub builds: Vec<BuildPiece>,
 }
 
 impl ItemView {
@@ -52,6 +56,10 @@ impl ItemView {
     pub fn packed_bag(&self) -> String {
         encode_slots(&self.bag)
     }
+
+    pub fn carried(&self) -> u16 {
+        self.bag.iter().map(|s| s.count).sum()
+    }
 }
 
 /// Address of one inventory cell. HUD hit-testing and click-to-move use this
@@ -62,12 +70,15 @@ pub enum SlotRef {
     Bag(usize),
     /// Open station slot (chest or furnace).
     Station(usize),
+    /// Worn gear `0..EQUIP_SLOTS`.
+    Equip(usize),
 }
 
 impl SlotRef {
     pub fn role(self, station: Option<StationKind>) -> SlotRole {
         match self {
             Self::Bag(_) => SlotRole::Any,
+            Self::Equip(_) => SlotRole::Any,
             Self::Station(i) => station.map(|k| k.slot_role(i)).unwrap_or(SlotRole::Any),
         }
     }
@@ -85,11 +96,18 @@ pub trait ItemStore {
     fn transfer_selected(&mut self, to_station: bool) -> bool;
     fn craft(&mut self, recipe_id: u16) -> bool;
     fn cycle_recipe(&mut self, dir: i32);
+    fn set_recipe_index(&mut self, i: usize);
     fn toggle_station(&mut self, id: u64) -> bool;
     fn close_station(&mut self);
     fn give(&mut self, item: ItemId, count: u16) -> u16;
 
-    /// Read a slot from the current view (server cache or local bag).
+    fn spend_stat(&mut self, stat: u8) -> bool;
+    fn add_skill_xp(&mut self, skill: u8, xp: u32);
+    fn consume_selected(&mut self) -> bool;
+    fn place_build(&mut self, pos: glam::Vec3) -> bool;
+    fn remove_nearest_build(&mut self, pos: glam::Vec3, range: f32) -> bool;
+
+    /// Move `from` → `to`. Whole stack, or a single item when `one` is set.
     fn peek_slot(&self, slot: SlotRef) -> Stack {
         let v = self.view();
         match slot {
@@ -98,6 +116,7 @@ pub trait ItemStore {
                 .open_station_view()
                 .and_then(|s| s.slots.get(i).copied())
                 .unwrap_or_else(Stack::empty),
+            SlotRef::Equip(i) => v.equip.get(i).copied().unwrap_or_else(Stack::empty),
         }
     }
 
@@ -117,6 +136,9 @@ pub struct LocalStore {
     recipe_cursor: usize,
     last_log: String,
     furnace_acc: f32,
+    equip: [Stack; EQUIP_SLOTS],
+    hero: Hero,
+    builds: Vec<BuildPiece>,
 }
 
 impl LocalStore {
@@ -131,6 +153,9 @@ impl LocalStore {
             recipe_cursor: 0,
             last_log: String::new(),
             furnace_acc: 0.0,
+            equip: empty_equip(),
+            hero: Hero::new(),
+            builds: Vec::new(),
         }
     }
 
@@ -237,6 +262,7 @@ impl LocalStore {
                 .find(|s| Some(s.id) == self.open_station)
                 .and_then(|s| s.slots.get(i).copied())
                 .unwrap_or_else(Stack::empty),
+            SlotRef::Equip(i) => self.equip.get(i).copied().unwrap_or_else(Stack::empty),
         }
     }
 
@@ -256,6 +282,11 @@ impl LocalStore {
                     if let Some(s) = st.slots.get_mut(i) {
                         *s = stack;
                     }
+                }
+            }
+            SlotRef::Equip(i) => {
+                if let Some(s) = self.equip.get_mut(i) {
+                    *s = stack;
                 }
             }
         }
@@ -278,6 +309,9 @@ impl ItemStore for LocalStore {
             open_station: self.open_station,
             recipe_cursor: self.recipe_cursor,
             last_log: self.last_log.clone(),
+            equip: self.equip,
+            hero: self.hero.clone(),
+            builds: self.builds.clone(),
         }
     }
 
@@ -294,7 +328,24 @@ impl ItemStore for LocalStore {
         let Some(idx) = self.loot.iter().position(|l| l.id == loot_id) else {
             return false;
         };
-        let loot = self.loot.remove(idx);
+        let mut loot = self.loot.remove(idx);
+        let have: u16 = self.bag.iter().map(|s| s.count).sum();
+        let room = self.hero.carry().saturating_sub(have);
+        if room == 0 {
+            self.loot.push(loot);
+            self.log("too heavy  spend STR or drop items");
+            return false;
+        }
+        if loot.stack.count > room {
+            let extra = loot.stack.count - room;
+            let id = self.alloc();
+            self.loot.push(LootView {
+                id,
+                stack: Stack::new(loot.stack.item, extra),
+                pos: loot.pos,
+            });
+            loot.stack.count = room;
+        }
         let left = insert_stack(&mut self.bag, loot.stack);
         if !left.is_empty() {
             self.loot.push(LootView {
@@ -310,6 +361,9 @@ impl ItemStore for LocalStore {
             loot.stack.item.def().name,
             loot.stack.count
         ));
+        if let Some((skill, xp)) = harvest_skill(loot.stack.item) {
+            self.hero.add_skill_xp(skill, xp * loot.stack.count.max(1) as u32);
+        }
         true
     }
 
@@ -432,6 +486,7 @@ impl ItemStore for LocalStore {
             return false;
         }
         self.log(format!("crafted {}", recipe.name));
+        self.hero.add_skill_xp(SkillId::Crafting, 12);
         true
     }
 
@@ -442,6 +497,11 @@ impl ItemStore for LocalStore {
         }
         let cur = self.recipe_cursor as i32 + dir;
         self.recipe_cursor = cur.rem_euclid(n as i32) as usize;
+    }
+
+    fn set_recipe_index(&mut self, i: usize) {
+        let n = self.available_recipes().len().max(1);
+        self.recipe_cursor = i % n;
     }
 
     fn toggle_station(&mut self, id: u64) -> bool {
@@ -466,6 +526,86 @@ impl ItemStore for LocalStore {
         insert_stack(&mut self.bag, Stack::new(item, count)).count
     }
 
+    fn spend_stat(&mut self, stat: u8) -> bool {
+        let Some(id) = crate::rpg::StatId::from_u8(stat) else {
+            return false;
+        };
+        if self.hero.spend(id) {
+            self.log(format!("{} +1", id.name()));
+            true
+        } else {
+            self.log("no stat points");
+            false
+        }
+    }
+
+    fn add_skill_xp(&mut self, skill: u8, xp: u32) {
+        if let Some(id) = SkillId::from_u8(skill) {
+            self.hero.add_skill_xp(id, xp);
+        }
+    }
+
+    fn consume_selected(&mut self) -> bool {
+        let slot = self.selected.min(BAG_SLOTS - 1);
+        let item = self.bag.get(slot).map(|s| s.item).unwrap_or(ItemId::EMPTY);
+        if item != ItemId::COOKED_MEAT && item != ItemId::RAW_MEAT {
+            return false;
+        }
+        let Some(_) = take_one(&mut self.bag, slot) else {
+            return false;
+        };
+        let heal = if item == ItemId::COOKED_MEAT { 28.0 } else { 8.0 };
+        self.hero.heal(heal);
+        self.log(format!("ate {}  hp {:.0}", item.def().name, self.hero.hp));
+        true
+    }
+
+    fn place_build(&mut self, pos: glam::Vec3) -> bool {
+        let slot = self.selected.min(BAG_SLOTS - 1);
+        let stack = self.bag.get(slot).copied().unwrap_or_else(Stack::empty);
+        if stack.is_empty() || stack.item.def().place == 0 {
+            self.log("that item cannot be placed");
+            return false;
+        }
+        let Some(_) = take_one(&mut self.bag, slot) else {
+            return false;
+        };
+        let id = self.alloc();
+        self.builds.push(BuildPiece {
+            id,
+            item: stack.item,
+            pos,
+        });
+        self.hero.add_skill_xp(SkillId::Building, 8);
+        self.log(format!("placed {}", stack.item.def().name));
+        true
+    }
+
+    fn remove_nearest_build(&mut self, pos: glam::Vec3, range: f32) -> bool {
+        let Some((idx, _)) = self
+            .builds
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.pos.distance(pos) <= range)
+            .min_by(|a, b| {
+                a.1.pos
+                    .distance(pos)
+                    .partial_cmp(&b.1.pos.distance(pos))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+        else {
+            return false;
+        };
+        let piece = self.builds.remove(idx);
+        let left = insert_stack(&mut self.bag, Stack::new(piece.item, 1));
+        if !left.is_empty() {
+            self.spawn_loot(left, piece.pos);
+        }
+        self.hero.add_skill_xp(SkillId::Building, 2);
+        self.log(format!("removed {}", piece.item.def().name));
+        true
+    }
+
     fn move_between(&mut self, from: SlotRef, to: SlotRef, one: bool) -> bool {
         if from == to {
             return true;
@@ -483,6 +623,16 @@ impl ItemStore for LocalStore {
         if !to.role(kind).accepts(moving) {
             self.log("that slot does not accept this item");
             return false;
+        }
+        if let SlotRef::Equip(i) = to {
+            let want = crate::rpg::equip_kind(i);
+            if moving.item.def().equip != want || want == EquipKind::None {
+                self.log("cannot wear that there");
+                return false;
+            }
+        }
+        if let SlotRef::Equip(_) = from {
+            // unequip is always allowed into bag/station that accepts it
         }
         let mut dest = self.slot_get(to);
         if dest.is_empty() || dest.item == moving.item {
@@ -534,6 +684,9 @@ pub fn unpack_station(kind: StationKind, packed: &str) -> Vec<Stack> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::items::{ItemId, Stack, StationKind};
+    use crate::rpg::SkillId;
+    use glam::Vec3;
 
     #[test]
     fn craft_sticks_and_pickup() {
@@ -585,6 +738,42 @@ mod tests {
         assert_eq!(s.view().loot[0].stack.count, 8);
         assert_eq!(ItemId::WOOD.visual_mesh(8), "Wood_Log_B");
         assert_eq!(ItemId::WOOD.visual_mesh(1), "Wood_Log_A");
+    }
+
+    #[test]
+    fn spend_stat_and_place_build() {
+        let mut s = LocalStore::new();
+        s.give(ItemId::WOOD_PLANK, 2);
+        s.select(0);
+        assert!(s.place_build(Vec3::new(2.0, 0.0, 2.0)));
+        assert_eq!(s.view().builds.len(), 1);
+        assert!(s.spend_stat(crate::rpg::StatId::Str as u8));
+        assert_eq!(s.view().hero.str, 6);
+        s.add_skill_xp(SkillId::Crafting as u8, 50);
+        assert!(s.view().hero.skills[SkillId::Crafting as usize].xp > 0);
+    }
+
+    #[test]
+    fn helm_equips_to_head() {
+        let mut s = LocalStore::new();
+        s.give(ItemId::HELM, 1);
+        assert!(s.move_between(SlotRef::Bag(0), SlotRef::Equip(0), false));
+        assert_eq!(s.view().equip[0].item, ItemId::HELM);
+        assert!(s.view().bag[0].is_empty());
+    }
+
+    #[test]
+    fn carry_cap_blocks_pickup() {
+        let mut s = LocalStore::new();
+        assert_eq!(s.hero.carry(), 60);
+        s.give(ItemId::STONE, 60);
+        s.spawn_loot(Stack::new(ItemId::WOOD, 4), Vec3::ZERO);
+        assert!(!s.pickup_nearest(Vec3::ZERO));
+        assert_eq!(s.view().loot.len(), 1);
+        assert!(s.spend_stat(crate::rpg::StatId::Str as u8));
+        assert_eq!(s.hero.carry(), 64);
+        assert!(s.pickup_nearest(Vec3::ZERO));
+        assert!(s.view().loot.is_empty());
     }
 }
 

@@ -4,6 +4,7 @@ use glam::Vec3;
 use spacetimedb_sdk::{DbContext, Table};
 
 use super::{decode_slots, empty_bag, ItemId, ItemView, LootView, Stack, StationKind, StationView, BAG_SLOTS};
+use crate::rpg::{BuildPiece, Hero, EQUIP_SLOTS};
 use crate::module_bindings::{
     DbConnection, InventoryTableAccess, StationTableAccess, WorldLootTableAccess,
 };
@@ -15,6 +16,9 @@ pub struct RemoteUi {
     pub open_station: Option<u64>,
     pub recipe_cursor: usize,
     pub last_log: String,
+    pub hero: Hero,
+    pub equip: [Stack; EQUIP_SLOTS],
+    pub builds: Vec<BuildPiece>,
 }
 
 pub fn view_from_connection(conn: &DbConnection, ui: &RemoteUi) -> ItemView {
@@ -66,5 +70,8 @@ pub fn view_from_connection(conn: &DbConnection, ui: &RemoteUi) -> ItemView {
         open_station: ui.open_station,
         recipe_cursor: ui.recipe_cursor,
         last_log: ui.last_log.clone(),
+        equip: ui.equip,
+        hero: ui.hero.clone(),
+        builds: ui.builds.clone(),
     }
 }

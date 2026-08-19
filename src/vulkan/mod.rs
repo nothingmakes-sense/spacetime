@@ -70,6 +70,7 @@ pub struct VulkanContext {
 
     pending_camera: CameraUbo,
     pending_light: LightUbo,
+    pub vsync: bool,
 
     /// Device must drop before instance. Keep these last.
     device: DeviceBundle,
@@ -77,7 +78,7 @@ pub struct VulkanContext {
 }
 
 impl VulkanContext {
-    pub fn new(window: Arc<Window>) -> Result<Self> {
+    pub fn new(window: Arc<Window>, vsync: bool) -> Result<Self> {
         let instance = InstanceBundle::new(&window)?;
         let device = DeviceBundle::new(
             &instance.instance,
@@ -105,6 +106,7 @@ impl VulkanContext {
             pipeline.render_pass,
             device.graphics_family,
             device.present_family,
+            vsync,
             None,
         )?;
 
@@ -265,6 +267,7 @@ impl VulkanContext {
             resized: false,
             pending_camera: CameraUbo::new(Mat4::IDENTITY, Mat4::IDENTITY, Vec3::ZERO),
             pending_light: LightUbo::new(Vec3::Y * 10.0, Vec3::ONE, 0.2, 0.4, 32.0),
+            vsync,
             device,
             instance,
         })
@@ -689,6 +692,13 @@ impl VulkanContext {
         Ok(())
     }
 
+    pub fn set_vsync(&mut self, vsync: bool) {
+        if self.vsync != vsync {
+            self.vsync = vsync;
+            self.resized = true;
+        }
+    }
+
     fn recreate_swapchain_internal(&mut self) -> Result<()> {
         let size = self.window.inner_size();
         if size.width == 0 || size.height == 0 {
@@ -708,6 +718,7 @@ impl VulkanContext {
             self.pipeline.render_pass,
             self.device.graphics_family,
             self.device.present_family,
+            self.vsync,
             Some(old),
         )?;
         unsafe {

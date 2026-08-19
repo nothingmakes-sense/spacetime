@@ -1,5 +1,6 @@
 mod catalog;
 mod gltf_loader;
+pub mod material_lib;
 mod paths;
 mod primitives;
 mod rig;

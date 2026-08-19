@@ -2,13 +2,14 @@ use std::collections::HashMap;
 
 use crate::hud::ItemMeshes;
 use crate::items::{ItemView, StationKind};
-use crate::objects::{LootObject, StationMeshes, StationObject};
+use crate::objects::{LootObject, PropObject, StationMeshes, StationObject};
 use crate::scene::{Object, ObjectKind, Scene};
 
 /// Keeps scene nodes in lockstep with the authoritative [`ItemView`].
 pub struct WorldSync {
     loot: HashMap<u64, crate::scene::ObjectId>,
     stations: HashMap<u64, crate::scene::ObjectId>,
+    builds: HashMap<u64, crate::scene::ObjectId>,
 }
 
 impl WorldSync {
@@ -16,6 +17,7 @@ impl WorldSync {
         Self {
             loot: HashMap::new(),
             stations: HashMap::new(),
+            builds: HashMap::new(),
         }
     }
 
@@ -70,6 +72,33 @@ impl WorldSync {
                 meshes,
             )));
             self.stations.insert(st.id, oid);
+        }
+
+        let live_b: std::collections::HashSet<u64> = view.builds.iter().map(|b| b.id).collect();
+        let stale_b: Vec<u64> = self
+            .builds
+            .keys()
+            .copied()
+            .filter(|id| !live_b.contains(id))
+            .collect();
+        for id in stale_b {
+            if let Some(oid) = self.builds.remove(&id) {
+                scene.remove(oid);
+            }
+        }
+        for piece in &view.builds {
+            if self.builds.contains_key(&piece.id) {
+                continue;
+            }
+            let Some(handle) = meshes.block_of(piece.item) else {
+                continue;
+            };
+            let oid = scene.alloc_id();
+            // `textured_box` / `unit_box` origin is bottom-center, so sit on y.
+            let obj = Object::new(oid, piece.item.def().name, ObjectKind::Prop)
+                .with_translation(piece.pos);
+            scene.spawn(Box::new(PropObject::new(obj, handle)));
+            self.builds.insert(piece.id, oid);
         }
     }
 }

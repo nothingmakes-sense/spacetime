@@ -7,6 +7,40 @@
 
 use super::{ItemStore, ItemView, SlotRef, Stack, BAG_SLOTS, HOTBAR};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum InvTab {
+    #[default]
+    Bag,
+    Stats,
+    Skills,
+    Craft,
+    Build,
+}
+
+impl InvTab {
+    pub const ALL: [InvTab; 5] = [Self::Bag, Self::Stats, Self::Skills, Self::Craft, Self::Build];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Bag => "BAG",
+            Self::Stats => "STATS",
+            Self::Skills => "SKILLS",
+            Self::Craft => "CRAFT",
+            Self::Build => "BUILD",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Bag => Self::Stats,
+            Self::Stats => Self::Skills,
+            Self::Skills => Self::Craft,
+            Self::Craft => Self::Build,
+            Self::Build => Self::Bag,
+        }
+    }
+}
+
 /// Pointer + panel state. Built on the client; never written to SpacetimeDB.
 #[derive(Clone, Debug, Default)]
 pub struct ItemUi {
@@ -25,6 +59,8 @@ pub struct ItemUi {
     pub mouse_ndc: (f32, f32),
     /// F3 debug overlay.
     pub debug: bool,
+    pub tab: InvTab,
+    pub hover: Option<SlotRef>,
 }
 
 impl ItemUi {
@@ -73,7 +109,7 @@ impl ItemUi {
             self.hide = Some(slot);
             store.select(match slot {
                 SlotRef::Bag(i) => i,
-                SlotRef::Station(_) => store.view().selected,
+                SlotRef::Station(_) | SlotRef::Equip(_) => store.view().selected,
             });
             return;
         }

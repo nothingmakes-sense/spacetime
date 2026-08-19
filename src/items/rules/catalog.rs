@@ -31,6 +31,11 @@ impl ItemId {
     pub const PICKAXE: Self = Self(20);
     pub const AXE: Self = Self(21);
     pub const SWORD: Self = Self(22);
+    pub const HELM: Self = Self(23);
+    pub const TUNIC: Self = Self(24);
+    pub const GLOVES: Self = Self(25);
+    pub const BOOTS: Self = Self(26);
+    pub const SHIELD: Self = Self(27);
 
     pub fn is_empty(self) -> bool {
         self.0 == 0
@@ -46,6 +51,11 @@ impl ItemId {
             fuel: 0,
             mesh: "",
             tiers: &[],
+            desc: "",
+            equip: EquipKind::None,
+            place: 0,
+            held: "",
+            mat: "",
         })
     }
 
@@ -59,6 +69,49 @@ impl ItemId {
             }
         }
         best
+    }
+
+    pub fn is_food(self) -> bool {
+        matches!(self, Self::COOKED_MEAT | Self::RAW_MEAT)
+    }
+}
+
+/// Where a stack may be worn. `None` = bag / hotbar only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum EquipKind {
+    #[default]
+    None = 0,
+    Head = 1,
+    Chest = 2,
+    Hands = 3,
+    Legs = 4,
+    Weapon = 5,
+    Offhand = 6,
+}
+
+impl EquipKind {
+    pub fn slot_index(self) -> Option<usize> {
+        match self {
+            Self::None => None,
+            Self::Head => Some(0),
+            Self::Chest => Some(1),
+            Self::Hands => Some(2),
+            Self::Legs => Some(3),
+            Self::Weapon => Some(4),
+            Self::Offhand => Some(5),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::Head => "HEAD",
+            Self::Chest => "CHEST",
+            Self::Hands => "HANDS",
+            Self::Legs => "LEGS",
+            Self::Weapon => "WEAPON",
+            Self::Offhand => "OFFHAND",
+        }
     }
 }
 
@@ -76,6 +129,14 @@ pub struct ItemDef {
     pub mesh: &'static str,
     /// `(min_count, gltf_stem)` — swap the world/HUD mesh as the stack grows.
     pub tiers: &'static [(u16, &'static str)],
+    pub desc: &'static str,
+    pub equip: EquipKind,
+    /// Voxel [`Block`] discriminant to place, or 0 if not a building piece.
+    pub place: u8,
+    /// Optional full path to a held-item glTF (weapons).
+    pub held: &'static str,
+    /// Material-LIB name used for the HUD gem / building cube.
+    pub mat: &'static str,
 }
 
 const LOG_TIERS: &[(u16, &str)] = &[
@@ -161,29 +222,36 @@ const TEXTILE_TIERS: &[(u16, &str)] = &[
 const FUEL_TIERS: &[(u16, &str)] = &[(1, "Fuel_A_Jerrycan"), (8, "Fuel_A_Barrel")];
 const COAL_TIERS: &[(u16, &str)] = &[(1, "Fuel_C_Jerrycan"), (8, "Fuel_C_Barrel")];
 
+const WPN: &str = "assets/kaykit/weapons";
+
 pub const CATALOG: &[ItemDef] = &[
-    ItemDef { id: ItemId::WOOD, name: "Wood", stack: 64, color: [0.55, 0.34, 0.16, 1.0], tool: false, fuel: 40, mesh: "Wood_Log_A", tiers: LOG_TIERS },
-    ItemDef { id: ItemId::STONE, name: "Stone", stack: 64, color: [0.55, 0.55, 0.52, 1.0], tool: false, fuel: 0, mesh: "Stone_Chunks_Small", tiers: STONE_TIERS },
-    ItemDef { id: ItemId::ORE, name: "Iron ore", stack: 64, color: [0.55, 0.32, 0.22, 1.0], tool: false, fuel: 0, mesh: "Iron_Nugget_Small", tiers: IRON_ORE_TIERS },
-    ItemDef { id: ItemId::COAL, name: "Coal", stack: 64, color: [0.12, 0.12, 0.13, 1.0], tool: false, fuel: 160, mesh: "Fuel_C_Jerrycan", tiers: COAL_TIERS },
-    ItemDef { id: ItemId::IRON, name: "Iron ingot", stack: 64, color: [0.72, 0.74, 0.78, 1.0], tool: false, fuel: 0, mesh: "Iron_Bar", tiers: IRON_BAR_TIERS },
-    ItemDef { id: ItemId::STICK, name: "Stick", stack: 64, color: [0.45, 0.30, 0.14, 1.0], tool: false, fuel: 20, mesh: "Wood_Plank_C", tiers: &[(1, "Wood_Plank_C")] },
-    ItemDef { id: ItemId::RAW_MEAT, name: "Raw meat", stack: 16, color: [0.72, 0.28, 0.28, 1.0], tool: false, fuel: 0, mesh: "", tiers: &[] },
-    ItemDef { id: ItemId::COOKED_MEAT, name: "Cooked meat", stack: 16, color: [0.45, 0.22, 0.10, 1.0], tool: false, fuel: 0, mesh: "", tiers: &[] },
-    ItemDef { id: ItemId::COPPER_NUGGET, name: "Copper nugget", stack: 64, color: [0.80, 0.45, 0.22, 1.0], tool: false, fuel: 0, mesh: "Copper_Nugget_Small", tiers: COPPER_NUGGET_TIERS },
-    ItemDef { id: ItemId::COPPER_BAR, name: "Copper bar", stack: 64, color: [0.85, 0.50, 0.25, 1.0], tool: false, fuel: 0, mesh: "Copper_Bar", tiers: COPPER_BAR_TIERS },
-    ItemDef { id: ItemId::SILVER_NUGGET, name: "Silver nugget", stack: 64, color: [0.78, 0.80, 0.84, 1.0], tool: false, fuel: 0, mesh: "Silver_Nugget_Small", tiers: SILVER_NUGGET_TIERS },
-    ItemDef { id: ItemId::SILVER_BAR, name: "Silver bar", stack: 64, color: [0.82, 0.84, 0.88, 1.0], tool: false, fuel: 0, mesh: "Silver_Bar", tiers: SILVER_BAR_TIERS },
-    ItemDef { id: ItemId::GOLD_NUGGET, name: "Gold nugget", stack: 64, color: [0.90, 0.72, 0.20, 1.0], tool: false, fuel: 0, mesh: "Gold_Nugget_Small", tiers: GOLD_NUGGET_TIERS },
-    ItemDef { id: ItemId::GOLD_BAR, name: "Gold bar", stack: 64, color: [0.95, 0.78, 0.18, 1.0], tool: false, fuel: 0, mesh: "Gold_Bar", tiers: GOLD_BAR_TIERS },
-    ItemDef { id: ItemId::STONE_BRICK, name: "Stone brick", stack: 64, color: [0.50, 0.48, 0.44, 1.0], tool: false, fuel: 0, mesh: "Stone_Brick", tiers: BRICK_TIERS },
-    ItemDef { id: ItemId::WOOD_PLANK, name: "Wood plank", stack: 64, color: [0.62, 0.42, 0.22, 1.0], tool: false, fuel: 30, mesh: "Wood_Plank_A", tiers: PLANK_TIERS },
-    ItemDef { id: ItemId::COG, name: "Cog", stack: 64, color: [0.60, 0.58, 0.52, 1.0], tool: false, fuel: 0, mesh: "Parts_Cog", tiers: COG_TIERS },
-    ItemDef { id: ItemId::TEXTILE, name: "Textile", stack: 64, color: [0.70, 0.62, 0.48, 1.0], tool: false, fuel: 10, mesh: "Textiles_A", tiers: TEXTILE_TIERS },
-    ItemDef { id: ItemId::FUEL_CAN, name: "Fuel can", stack: 16, color: [0.75, 0.18, 0.14, 1.0], tool: false, fuel: 240, mesh: "Fuel_A_Jerrycan", tiers: FUEL_TIERS },
-    ItemDef { id: ItemId::PICKAXE, name: "Pickaxe", stack: 1, color: [0.40, 0.42, 0.48, 1.0], tool: true, fuel: 0, mesh: "", tiers: &[] },
-    ItemDef { id: ItemId::AXE, name: "Axe", stack: 1, color: [0.50, 0.38, 0.22, 1.0], tool: true, fuel: 0, mesh: "", tiers: &[] },
-    ItemDef { id: ItemId::SWORD, name: "Sword", stack: 1, color: [0.80, 0.82, 0.88, 1.0], tool: true, fuel: 0, mesh: "", tiers: &[] },
+    ItemDef { id: ItemId::WOOD, name: "Wood", stack: 64, color: [0.55, 0.34, 0.16, 1.0], tool: false, fuel: 40, mesh: "Wood_Log_A", tiers: LOG_TIERS, desc: "TIMBER FOR FUEL AND BUILDING", equip: EquipKind::None, place: 4, held: "", mat: "wood" },
+    ItemDef { id: ItemId::STONE, name: "Stone", stack: 64, color: [0.55, 0.55, 0.52, 1.0], tool: false, fuel: 0, mesh: "Stone_Chunks_Small", tiers: STONE_TIERS, desc: "ROUGH ROCK FOR WALLS AND SMELTING", equip: EquipKind::None, place: 10, held: "", mat: "cobble" },
+    ItemDef { id: ItemId::ORE, name: "Iron ore", stack: 64, color: [0.55, 0.32, 0.22, 1.0], tool: false, fuel: 0, mesh: "Iron_Nugget_Small", tiers: IRON_ORE_TIERS, desc: "RAW IRON READY FOR THE FURNACE", equip: EquipKind::None, place: 0, held: "", mat: "rock" },
+    ItemDef { id: ItemId::COAL, name: "Coal", stack: 64, color: [0.12, 0.12, 0.13, 1.0], tool: false, fuel: 160, mesh: "Fuel_C_Jerrycan", tiers: COAL_TIERS, desc: "HOT FUEL FOR THE FURNACE", equip: EquipKind::None, place: 0, held: "", mat: "gravel" },
+    ItemDef { id: ItemId::IRON, name: "Iron ingot", stack: 64, color: [0.72, 0.74, 0.78, 1.0], tool: false, fuel: 0, mesh: "Iron_Bar", tiers: IRON_BAR_TIERS, desc: "REFINED METAL FOR TOOLS AND BLOCKS", equip: EquipKind::None, place: 5, held: "", mat: "iron" },
+    ItemDef { id: ItemId::STICK, name: "Stick", stack: 64, color: [0.45, 0.30, 0.14, 1.0], tool: false, fuel: 20, mesh: "Wood_Plank_C", tiers: &[(1, "Wood_Plank_C")], desc: "HANDLE STOCK FOR TOOLS", equip: EquipKind::None, place: 0, held: "", mat: "wood" },
+    ItemDef { id: ItemId::RAW_MEAT, name: "Raw meat", stack: 16, color: [0.72, 0.28, 0.28, 1.0], tool: false, fuel: 0, mesh: "", tiers: &[], desc: "COOK BEFORE EATING", equip: EquipKind::None, place: 0, held: "", mat: "fabric" },
+    ItemDef { id: ItemId::COOKED_MEAT, name: "Cooked meat", stack: 16, color: [0.45, 0.22, 0.10, 1.0], tool: false, fuel: 0, mesh: "", tiers: &[], desc: "RMB IN WORLD TO EAT  RESTORES HP", equip: EquipKind::None, place: 0, held: "", mat: "fabric" },
+    ItemDef { id: ItemId::COPPER_NUGGET, name: "Copper nugget", stack: 64, color: [0.80, 0.45, 0.22, 1.0], tool: false, fuel: 0, mesh: "Copper_Nugget_Small", tiers: COPPER_NUGGET_TIERS, desc: "SOFT ORE FOR BARS", equip: EquipKind::None, place: 0, held: "", mat: "copper" },
+    ItemDef { id: ItemId::COPPER_BAR, name: "Copper bar", stack: 64, color: [0.85, 0.50, 0.25, 1.0], tool: false, fuel: 0, mesh: "Copper_Bar", tiers: COPPER_BAR_TIERS, desc: "CONDUCTIVE METAL BLOCK", equip: EquipKind::None, place: 6, held: "", mat: "copper" },
+    ItemDef { id: ItemId::SILVER_NUGGET, name: "Silver nugget", stack: 64, color: [0.78, 0.80, 0.84, 1.0], tool: false, fuel: 0, mesh: "Silver_Nugget_Small", tiers: SILVER_NUGGET_TIERS, desc: "PRECIOUS ORE", equip: EquipKind::None, place: 0, held: "", mat: "iron" },
+    ItemDef { id: ItemId::SILVER_BAR, name: "Silver bar", stack: 64, color: [0.82, 0.84, 0.88, 1.0], tool: false, fuel: 0, mesh: "Silver_Bar", tiers: SILVER_BAR_TIERS, desc: "FINE METAL FOR TRINKETS", equip: EquipKind::None, place: 0, held: "", mat: "iron" },
+    ItemDef { id: ItemId::GOLD_NUGGET, name: "Gold nugget", stack: 64, color: [0.90, 0.72, 0.20, 1.0], tool: false, fuel: 0, mesh: "Gold_Nugget_Small", tiers: GOLD_NUGGET_TIERS, desc: "RARE ORE", equip: EquipKind::None, place: 0, held: "", mat: "gold" },
+    ItemDef { id: ItemId::GOLD_BAR, name: "Gold bar", stack: 64, color: [0.95, 0.78, 0.18, 1.0], tool: false, fuel: 0, mesh: "Gold_Bar", tiers: GOLD_BAR_TIERS, desc: "WEALTH YOU CAN BUILD WITH", equip: EquipKind::None, place: 7, held: "", mat: "gold" },
+    ItemDef { id: ItemId::STONE_BRICK, name: "Stone brick", stack: 64, color: [0.50, 0.48, 0.44, 1.0], tool: false, fuel: 0, mesh: "Stone_Brick", tiers: BRICK_TIERS, desc: "FIRED BRICK FOR WALLS", equip: EquipKind::None, place: 9, held: "", mat: "brick" },
+    ItemDef { id: ItemId::WOOD_PLANK, name: "Wood plank", stack: 64, color: [0.62, 0.42, 0.22, 1.0], tool: false, fuel: 30, mesh: "Wood_Plank_A", tiers: PLANK_TIERS, desc: "SAWN BOARDS FOR FLOORS AND WALLS", equip: EquipKind::None, place: 11, held: "", mat: "planks" },
+    ItemDef { id: ItemId::COG, name: "Cog", stack: 64, color: [0.60, 0.58, 0.52, 1.0], tool: false, fuel: 0, mesh: "Parts_Cog", tiers: COG_TIERS, desc: "MACHINE PART", equip: EquipKind::None, place: 0, held: "", mat: "iron" },
+    ItemDef { id: ItemId::TEXTILE, name: "Textile", stack: 64, color: [0.70, 0.62, 0.48, 1.0], tool: false, fuel: 10, mesh: "Textiles_A", tiers: TEXTILE_TIERS, desc: "CLOTH FOR GEAR", equip: EquipKind::None, place: 0, held: "", mat: "fabric" },
+    ItemDef { id: ItemId::FUEL_CAN, name: "Fuel can", stack: 16, color: [0.75, 0.18, 0.14, 1.0], tool: false, fuel: 240, mesh: "Fuel_A_Jerrycan", tiers: FUEL_TIERS, desc: "DENSE FURNACE FUEL", equip: EquipKind::None, place: 0, held: "", mat: "copper" },
+    ItemDef { id: ItemId::PICKAXE, name: "Pickaxe", stack: 1, color: [0.40, 0.42, 0.48, 1.0], tool: true, fuel: 0, mesh: "", tiers: &[], desc: "MINE STONE AND ORE", equip: EquipKind::Weapon, place: 0, held: "assets/kaykit/weapons/axe_2handed.gltf", mat: "iron" },
+    ItemDef { id: ItemId::AXE, name: "Axe", stack: 1, color: [0.50, 0.38, 0.22, 1.0], tool: true, fuel: 0, mesh: "", tiers: &[], desc: "CHOP WOOD AND SWING", equip: EquipKind::Weapon, place: 0, held: "assets/kaykit/weapons/axe_1handed.gltf", mat: "wood" },
+    ItemDef { id: ItemId::SWORD, name: "Sword", stack: 1, color: [0.80, 0.82, 0.88, 1.0], tool: true, fuel: 0, mesh: "", tiers: &[], desc: "A KNIGHTS SIDEARM", equip: EquipKind::Weapon, place: 0, held: "assets/kaykit/weapons/sword_1handed.gltf", mat: "iron" },
+    ItemDef { id: ItemId::HELM, name: "Cloth helm", stack: 1, color: [0.62, 0.55, 0.42, 1.0], tool: false, fuel: 0, mesh: "Textiles_A", tiers: &[], desc: "SOFT CAP  WEAR ON HEAD", equip: EquipKind::Head, place: 0, held: "", mat: "fabric" },
+    ItemDef { id: ItemId::TUNIC, name: "Cloth tunic", stack: 1, color: [0.55, 0.48, 0.36, 1.0], tool: false, fuel: 0, mesh: "Textiles_B", tiers: &[], desc: "PADDED SHIRT  WEAR ON CHEST", equip: EquipKind::Chest, place: 0, held: "", mat: "fabric" },
+    ItemDef { id: ItemId::GLOVES, name: "Cloth gloves", stack: 1, color: [0.58, 0.50, 0.38, 1.0], tool: false, fuel: 0, mesh: "Textiles_A", tiers: &[], desc: "WRAPS FOR THE HANDS", equip: EquipKind::Hands, place: 0, held: "", mat: "fabric" },
+    ItemDef { id: ItemId::BOOTS, name: "Cloth boots", stack: 1, color: [0.42, 0.32, 0.22, 1.0], tool: false, fuel: 0, mesh: "Textiles_A", tiers: &[], desc: "LIGHT FOOTWEAR", equip: EquipKind::Legs, place: 0, held: "", mat: "wood" },
+    ItemDef { id: ItemId::SHIELD, name: "Round shield", stack: 1, color: [0.62, 0.48, 0.28, 1.0], tool: false, fuel: 0, mesh: "", tiers: &[], desc: "WOOD AND IRON  OFFHAND", equip: EquipKind::Offhand, place: 0, held: "assets/kaykit/weapons/shield_round.gltf", mat: "wood" },
 ];
 
 pub const BAG_SLOTS: usize = 36;
@@ -197,3 +265,6 @@ pub const STATION_RANGE: f32 = 2.6;
 pub const STACK_MERGE_RANGE: f32 = 1.45;
 
 pub const RESOURCE_BITS_DIR: &str = "assets/kaykit/resource_bits";
+
+#[allow(dead_code)]
+const _WPN: &str = WPN;

@@ -9,6 +9,7 @@ use super::materials::Block;
 use crate::assets::{Mesh, Model, Vertex};
 
 pub const CHUNK_SIZE: i32 = 16;
+pub const WORLD_SEED: u64 = 42;
 
 #[derive(Clone)]
 pub struct Chunk {
@@ -76,8 +77,24 @@ impl Chunk {
     /// Culled cubes. Each exposed face is two triangles tinted with the
     /// material color (atlas UVs are filled so a later pass can sample the PNG).
     pub fn mesh(&self) -> Model {
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
+        self.build_mesh(|_| None)
+    }
+
+    /// One submesh per block type, each carrying a Material-LIB albedo.
+    pub fn mesh_textured<F>(&self, mut tex: F) -> Model
+    where
+        F: FnMut(Block) -> Option<(u32, u32, Vec<u8>)>,
+    {
+        self.build_mesh(|b| tex(b))
+    }
+
+    fn build_mesh<F>(&self, mut tex: F) -> Model
+    where
+        F: FnMut(Block) -> Option<(u32, u32, Vec<u8>)>,
+    {
+        use std::collections::HashMap;
+        let mut groups: HashMap<u8, (Vec<Vertex>, Vec<u32>, Option<(u32, u32, Vec<u8>)>)> =
+            HashMap::new();
         const FACES: [([f32; 3], [[f32; 3]; 4]); 6] = [
             ([0.0, 1.0, 0.0], [[0.0, 1.0, 0.0], [1.0, 1.0, 0.0], [1.0, 1.0, 1.0], [0.0, 1.0, 1.0]]),
             ([0.0, -1.0, 0.0], [[0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
@@ -93,8 +110,16 @@ impl Chunk {
                     if !b.is_solid() {
                         continue;
                     }
+                    let entry = groups.entry(b as u8).or_insert_with(|| {
+                        let px = tex(b);
+                        (Vec::new(), Vec::new(), px)
+                    });
                     let mat = b.material();
-                    let uv = mat.uv_rect();
+                    let uv = if entry.2.is_some() {
+                        [0.0, 0.0, 1.0, 1.0]
+                    } else {
+                        mat.uv_rect()
+                    };
                     for (ni, (n, corners)) in FACES.iter().enumerate() {
                         let nx = x + [0, 0, 0, 0, 1, -1][ni];
                         let ny = y + [1, -1, 0, 0, 0, 0][ni];
@@ -102,34 +127,55 @@ impl Chunk {
                         if self.get(nx, ny, nz).is_solid() {
                             continue;
                         }
-                        let base = vertices.len() as u32;
+                        let base = entry.0.len() as u32;
                         for (i, c) in corners.iter().enumerate() {
                             let u = if i == 0 || i == 3 { uv[0] } else { uv[2] };
                             let v = if i < 2 { uv[3] } else { uv[1] };
-                            vertices.push(Vertex::new(
+                            entry.0.push(Vertex::new(
                                 [x as f32 + c[0], y as f32 + c[1], z as f32 + c[2]],
                                 *n,
                                 [u, v],
                             ));
                         }
-                        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
-                        let _ = mat.color;
+                        entry.1.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
                     }
                 }
             }
         }
-        Model {
-            name: format!("chunk_{}_{}_{}", self.origin.x, self.origin.y, self.origin.z),
-            meshes: vec![Mesh {
+        let mut meshes = Vec::new();
+        for (id, (vertices, indices, px)) in groups {
+            if indices.is_empty() {
+                continue;
+            }
+            let mat = Block::from_u8(id).material();
+            meshes.push(Mesh {
                 vertices,
                 indices,
+                albedo: if px.is_some() { [1.0, 1.0, 1.0, 1.0] } else { mat.color },
+                albedo_pixels: px.as_ref().map(|p| p.2.clone()),
+                albedo_size: px.map(|p| (p.0.max(1), p.1.max(1))).unwrap_or((1, 1)),
+            });
+        }
+        if meshes.is_empty() {
+            meshes.push(Mesh {
+                vertices: Vec::new(),
+                indices: Vec::new(),
                 albedo: [1.0, 1.0, 1.0, 1.0],
                 albedo_pixels: None,
                 albedo_size: (1, 1),
-            }],
+            });
+        }
+        Model {
+            name: format!("chunk_{}_{}_{}", self.origin.x, self.origin.y, self.origin.z),
+            meshes,
             sockets: Vec::new(),
         }
     }
+}
+
+/// Terrain height in voxel Y at world XZ. Used to sit the mesh on the physics plane.
+pub fn surface_at(x: i32, z: i32, seed: u64) -> i32 {
+    height(x, z, seed)
 }
 
 fn hash(x: i32, z: i32, seed: u64) -> f32 {
@@ -169,6 +215,7 @@ fn ore_at(x: i32, y: i32, z: i32, seed: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::IVec3;
 
     #[test]
     fn heightfield_is_deterministic_and_has_faces() {
@@ -176,6 +223,6 @@ mod tests {
         let b = Chunk::from_height(IVec3::new(0, 0, 0), 42);
         assert_eq!(a.blocks, b.blocks);
         let mesh = a.mesh();
-        assert!(!mesh.meshes[0].indices.is_empty());
+        assert!(mesh.meshes.iter().any(|m| !m.indices.is_empty()));
     }
 }

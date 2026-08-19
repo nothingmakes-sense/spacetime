@@ -1,6 +1,6 @@
 use glam::{Mat4, Quat, Vec3};
 
-use crate::config::{MOUSE_SENSITIVITY, MOVE_SPEED, SPRINT_MULTIPLIER};
+use crate::config::{MOVE_SPEED, SPRINT_MULTIPLIER};
 use crate::input::InputState;
 
 /// KayKit Adventurers face +Z in rest pose (cape on −Z, visor on +Z).
@@ -45,10 +45,10 @@ impl Player {
         }
     }
 
-    pub fn apply_look(&mut self, dx: f64, dy: f64) {
+    pub fn apply_look(&mut self, dx: f64, dy: f64, sensitivity: f32) {
         // Mouse right increases world-right heading (yaw decreases → toward +X at yaw 0).
-        self.yaw -= dx as f32 * MOUSE_SENSITIVITY;
-        self.pitch -= dy as f32 * MOUSE_SENSITIVITY;
+        self.yaw -= dx as f32 * sensitivity;
+        self.pitch -= dy as f32 * sensitivity;
         self.pitch = self.pitch.clamp(-1.35, 0.35);
     }
 
