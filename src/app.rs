@@ -1,3 +1,10 @@
+//! Game loop: window events → input → items → physics → scene → Vulkan.
+//!
+//! **In:** winit events, [`GameMode`] (local store or SpacetimeDB connection).
+//! **Out:** frames via [`VulkanContext`], reducer calls through [`ItemStore`].
+//! Physics runs at [`FIXED_DT`]; `render` interpolates `prev_pos` → current
+//! so walking does not quantize to 60 Hz.
+
 use anyhow::{Context, Result};
 use glam::{Mat4, Vec3};
 use log::{error, info, warn};
@@ -19,11 +26,11 @@ use crate::assets::{
 };
 use crate::config::*;
 use crate::game_mode::GameMode;
-use crate::hud::{self, ItemMeshes};
+use crate::hud::{self, DebugSnap, ItemMeshes};
 use crate::input::InputState;
 #[allow(unused_imports)]
 use crate::items::{
-    selected_recipe, ItemStore, ItemUi, WorldSync, BAG_SLOTS, HOTBAR,
+    selected_recipe, ItemStore, ItemUi, WorldSync, BAG_SLOTS, HOTBAR, STATION_RANGE,
 };
 use crate::objects::{AttachedItem, CharacterObject, PropObject};
 use crate::physics::PhysicsWorld;
@@ -50,6 +57,9 @@ pub struct App {
 
     last_frame: Instant,
     accumulator: f32,
+    /// Physics pose at the start of this frame's steps — lerped in `render`.
+    prev_pos: Vec3,
+    fps: f32,
 
     ground: Option<crate::vulkan::ModelHandle>,
     remote_mesh: Option<crate::vulkan::ModelHandle>,
@@ -72,6 +82,8 @@ impl App {
             world_sync: WorldSync::new(),
             last_frame: Instant::now(),
             accumulator: 0.0,
+            prev_pos: Vec3::new(0.0, 0.0, 6.0),
+            fps: 60.0,
             ground: None,
             remote_mesh: None,
         })
@@ -171,7 +183,7 @@ impl App {
         self.vulkan = Some(vulkan);
 
         info!(
-            "Controls: WASD · Shift run · Space jump · C/F sit · Q/LMB swing · E use · Tab bag · G drop · R craft · T/Y transfer · Esc mouse"
+            "Controls: WASD · Shift run · hold Space jump · C/F sit · Q/LMB swing · E use · Tab bag · G drop · R craft · T/Y transfer · Esc mouse"
         );
         Ok(())
     }
@@ -223,9 +235,39 @@ impl App {
 
         if edges.inventory {
             self.item_ui.toggle_bag();
-            if !self.item_ui.bag_open {
+            if self.item_ui.bag_open {
+                // Free the cursor so the player can click slots. WASD stays live.
+                self.input.mouse_captured = false;
+                self.set_cursor_captured(false);
+            } else {
+                self.item_ui.cancel_drag();
                 self.mode.items().close_station();
                 self.item_ui.on_station_closed();
+            }
+        }
+
+        if edges.debug {
+            self.item_ui.debug = !self.item_ui.debug;
+        }
+
+        // Click-to-move: LMB whole stack, RMB one item. Works on the hotbar
+        // even when the bag is closed, as long as the cursor is free.
+        if (edges.lmb || edges.rmb) && (self.item_ui.bag_open || !self.input.mouse_captured) {
+            if let Some(w) = &self.window {
+                let size = w.inner_size();
+                self.item_ui.set_mouse_pixels(
+                    self.input.mouse_x,
+                    self.input.mouse_y,
+                    size.width as f32,
+                    size.height as f32,
+                );
+            }
+            let view = self.mode.items().view();
+            if let Some(slot) = hud::hit_slot(&view, self.item_ui.bag_open, self.item_ui.mouse_ndc.0, self.item_ui.mouse_ndc.1)
+            {
+                self.item_ui.click_slot(self.mode.items(), slot, edges.rmb);
+            } else if edges.lmb && !self.item_ui.held.is_empty() {
+                self.item_ui.cancel_drag();
             }
         }
 
@@ -287,8 +329,19 @@ impl App {
         self.mode.items().pickup_nearest(pos);
 
         if self.mode.items().view().open_station.is_some() {
+            if !self.item_ui.bag_open {
+                self.input.mouse_captured = false;
+                self.set_cursor_captured(false);
+            }
             self.item_ui.on_station_opened();
         }
+    }
+
+    fn close_all_ui(&mut self) {
+        self.item_ui.cancel_drag();
+        self.item_ui.bag_open = false;
+        self.mode.items().close_station();
+        self.item_ui.on_station_closed();
     }
 
     fn update(&mut self, dt: f32) {
@@ -299,17 +352,29 @@ impl App {
 
         self.handle_item_input(&edges);
 
+        // Station UI: walking out of range closes it.
+        {
+            let view = self.mode.items().view();
+            if let Some(st) = view.open_station_view() {
+                if self.player.position.distance(st.pos) > STATION_RANGE {
+                    drop(view);
+                    self.close_all_ui();
+                }
+            }
+        }
+
         self.player.update_movement(&self.input, dt);
         self.physics.set_wish_horizontal(
             self.player.velocity.x,
             self.player.velocity.z,
-            self.input.jump && self.player.on_ground && !self.player.sitting,
+            self.input.jump && !self.player.sitting,
         );
         self.physics.step(dt);
 
         if let Some((pos, on_ground)) = self.physics.player_transform() {
             self.player.position = pos;
             self.player.on_ground = on_ground;
+            self.player.velocity.y = self.physics.player_velocity().y;
         }
 
         self.mode.items().tick(dt);
@@ -392,7 +457,9 @@ impl App {
             return Ok(());
         }
         let aspect = size.width as f32 / size.height.max(1) as f32;
-        let (view, eye) = self.player.chase_view_matrix();
+        let alpha = (self.accumulator / FIXED_DT).clamp(0.0, 1.0);
+        let render_pos = self.prev_pos.lerp(self.player.position, alpha);
+        let (view, eye) = self.player.chase_view_at(render_pos);
         let proj = Mat4::perspective_rh(55f32.to_radians(), aspect, 0.1, 200.0);
 
         vk.begin_frame()?;
@@ -419,7 +486,29 @@ impl App {
 
         if let Some(meshes) = &self.item_meshes {
             let item_view = self.mode.items().view();
-            for draw in hud::hud_draws(meshes, &item_view, &self.item_ui, eye, view) {
+            self.item_ui.set_mouse_pixels(
+                self.input.mouse_x,
+                self.input.mouse_y,
+                size.width as f32,
+                size.height as f32,
+            );
+            let debug = self.item_ui.debug.then_some(DebugSnap {
+                fps: self.fps,
+                pos: self.player.position,
+                vel: self.player.velocity,
+                yaw: self.player.yaw,
+                pitch: self.player.pitch,
+                grounded: self.player.on_ground,
+                sitting: self.player.sitting,
+                bag_open: self.item_ui.bag_open,
+                selected: item_view.selected,
+                held: self.item_ui.held,
+                station: item_view.open_station_view().map(|s| s.kind.name()),
+                loot: item_view.loot.len(),
+                multiplayer: matches!(self.mode, GameMode::Multiplayer { .. }),
+            });
+            vk.begin_overlay();
+            for draw in hud::hud_draws(meshes, &item_view, &self.item_ui, debug.as_ref()) {
                 vk.draw_model(draw.handle, draw.model)?;
             }
         }
@@ -477,17 +566,24 @@ impl ApplicationHandler for App {
                 };
                 self.input.add_wheel(y);
             }
-            WindowEvent::MouseInput {
-                state,
-                button: MouseButton::Left,
-                ..
-            } => {
+            WindowEvent::CursorMoved { position, .. } => {
+                self.input.set_mouse(position.x as f32, position.y as f32);
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
                 let pressed = state == ElementState::Pressed;
-                if pressed && !self.input.mouse_captured {
-                    self.input.mouse_captured = true;
-                    self.set_cursor_captured(true);
-                } else {
-                    self.input.set_attack(pressed);
+                match button {
+                    MouseButton::Left => {
+                        if self.item_ui.bag_open {
+                            self.input.set_lmb(pressed);
+                        } else if pressed && !self.input.mouse_captured {
+                            self.input.mouse_captured = true;
+                            self.set_cursor_captured(true);
+                        } else {
+                            self.input.set_attack(pressed);
+                        }
+                    }
+                    MouseButton::Right => self.input.set_rmb(pressed),
+                    _ => {}
                 }
             }
             WindowEvent::KeyboardInput {
@@ -502,9 +598,7 @@ impl ApplicationHandler for App {
                 let pressed = state == ElementState::Pressed;
                 if code == KeyCode::Escape && pressed {
                     if self.item_ui.bag_open || self.mode.items().view().open_station.is_some() {
-                        self.item_ui.bag_open = false;
-                        self.mode.items().close_station();
-                        self.item_ui.on_station_closed();
+                        self.close_all_ui();
                     } else {
                         self.input.toggle_mouse_capture();
                         self.set_cursor_captured(self.input.mouse_captured);
@@ -524,7 +618,7 @@ impl ApplicationHandler for App {
         event: DeviceEvent,
     ) {
         if let DeviceEvent::MouseMotion { delta } = event {
-            if self.input.mouse_captured {
+            if self.input.mouse_captured && !self.item_ui.bag_open {
                 self.player.apply_look(delta.0, delta.1);
             }
         }
@@ -535,8 +629,19 @@ impl ApplicationHandler for App {
         let frame_time = (now - self.last_frame).as_secs_f32().min(MAX_FRAME_TIME);
         self.last_frame = now;
 
+        self.fps = if frame_time > 1e-4 {
+            self.fps * 0.9 + (1.0 / frame_time) * 0.1
+        } else {
+            self.fps
+        };
+
         self.accumulator += frame_time;
+        let mut stepped = false;
         while self.accumulator >= FIXED_DT {
+            if !stepped {
+                self.prev_pos = self.player.position;
+                stepped = true;
+            }
             self.update(FIXED_DT);
             self.accumulator -= FIXED_DT;
         }

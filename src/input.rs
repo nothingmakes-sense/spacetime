@@ -1,3 +1,9 @@
+//! Keyboard / mouse state.
+//!
+//! **In:** winit key/mouse events. **Out:** held flags + rising-edge
+//! [`InputEdges`] consumed once per physics tick. Mouse pixels are stored
+//! raw; `ItemUi::set_mouse_pixels` converts them to HUD NDC.
+
 use winit::keyboard::KeyCode;
 
 #[derive(Default, Debug, Clone)]
@@ -25,6 +31,9 @@ pub struct InputState {
     pub cursor_down: bool,
     pub hotbar: Option<usize>,
     pub wheel: i32,
+    /// Last cursor position in window pixels (origin top-left).
+    pub mouse_x: f32,
+    pub mouse_y: f32,
     sit_was: bool,
     interact_was: bool,
     attack_was: bool,
@@ -39,6 +48,12 @@ pub struct InputState {
     cursor_right_was: bool,
     cursor_up_was: bool,
     cursor_down_was: bool,
+    debug_was: bool,
+    pub debug: bool,
+    lmb: bool,
+    rmb: bool,
+    lmb_was: bool,
+    rmb_was: bool,
 }
 
 impl InputState {
@@ -56,6 +71,7 @@ impl InputState {
             KeyCode::Tab | KeyCode::KeyI => self.inventory = pressed,
             KeyCode::KeyG => self.drop = pressed,
             KeyCode::KeyR => self.craft = pressed,
+            KeyCode::F3 => self.debug = pressed,
             KeyCode::KeyT => {
                 if self.sprint {
                     self.take = pressed;
@@ -87,6 +103,19 @@ impl InputState {
         self.attack = pressed;
     }
 
+    pub fn set_lmb(&mut self, pressed: bool) {
+        self.lmb = pressed;
+    }
+
+    pub fn set_rmb(&mut self, pressed: bool) {
+        self.rmb = pressed;
+    }
+
+    pub fn set_mouse(&mut self, x: f32, y: f32) {
+        self.mouse_x = x;
+        self.mouse_y = y;
+    }
+
     pub fn add_wheel(&mut self, delta: f32) {
         if delta > 0.0 {
             self.wheel -= 1;
@@ -112,6 +141,9 @@ impl InputState {
             cursor_right: self.cursor_right && !self.cursor_right_was,
             cursor_up: self.cursor_up && !self.cursor_up_was,
             cursor_down: self.cursor_down && !self.cursor_down_was,
+            debug: self.debug && !self.debug_was,
+            lmb: self.lmb && !self.lmb_was,
+            rmb: self.rmb && !self.rmb_was,
             hotbar: self.hotbar.take(),
             wheel: std::mem::take(&mut self.wheel),
         };
@@ -129,6 +161,9 @@ impl InputState {
         self.cursor_right_was = self.cursor_right;
         self.cursor_up_was = self.cursor_up;
         self.cursor_down_was = self.cursor_down;
+        self.debug_was = self.debug;
+        self.lmb_was = self.lmb;
+        self.rmb_was = self.rmb;
         edges
     }
 
@@ -153,6 +188,9 @@ pub struct InputEdges {
     pub cursor_right: bool,
     pub cursor_up: bool,
     pub cursor_down: bool,
+    pub debug: bool,
+    pub lmb: bool,
+    pub rmb: bool,
     pub hotbar: Option<usize>,
     pub wheel: i32,
 }

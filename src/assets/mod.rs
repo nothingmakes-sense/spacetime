@@ -9,7 +9,7 @@ mod vertex;
 pub use catalog::{AdventurerClass, ANIM_GENERAL, ANIM_MOVEMENT, GROUND_HALF_EXTENT};
 pub use paths::resolve_asset;
 pub use primitives::{
-    chest_parts, digit_quad, furnace_parts, ground_plane, item_gem, slot_plate, unit_box,
+    chest_parts, digit_quad, furnace_parts, glyph_quad, ground_plane, item_gem, slot_plate, unit_box,
     workbench_model,
 };
 pub use rig::{load_rigged, RiggedModel, SkinnedPrim};

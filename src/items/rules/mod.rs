@@ -21,7 +21,7 @@ pub use recipe::{
     recipe_by_id, recipes_for, smelt_of, CraftStation, Ingredient, Recipe, RECIPES,
 };
 pub use stack::{decode_slots, empty_bag, encode_slots, Stack};
-pub use station::StationKind;
+pub use station::{SlotRole, StationKind};
 
 /// Default yard layout — identical on the server `init` reducer and in `LocalStore`.
 pub const DEFAULT_STATIONS: &[(StationKind, f32, f32, f32, f32)] = &[

@@ -12,7 +12,7 @@ mod world_sync;
 
 pub use remote::{view_from_connection, RemoteUi};
 pub use rules::*;
-pub use store::{ItemStore, ItemView, LocalStore, LootView, StationView};
+pub use store::{ItemStore, ItemView, LocalStore, LootView, SlotRef, StationView};
 pub use ui::ItemUi;
 pub use world_sync::WorldSync;
 

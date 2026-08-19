@@ -6,7 +6,7 @@ use spacetimedb_sdk::{DbContext, Table, TableWithPrimaryKey};
 
 use crate::items::{
     first_compatible, first_nonempty, recipe_by_id, recipes_for, view_from_connection, CraftStation,
-    ItemId, ItemStore, ItemView, RemoteUi, BAG_SLOTS,
+    ItemId, ItemStore, ItemView, RemoteUi, SlotRef, BAG_SLOTS,
 };
 use crate::module_bindings::{
     craft, drop_selected, pickup_loot, select_slot, swap_slots, transfer_station, update_transform,
@@ -247,5 +247,33 @@ impl ItemStore for Multiplayer {
 
     fn give(&mut self, _item: ItemId, _count: u16) -> u16 {
         0
+    }
+
+    fn move_between(&mut self, from: SlotRef, to: SlotRef, _one: bool) -> bool {
+        if from == to {
+            return true;
+        }
+        let view = self.view();
+        let kind = view.open_station_view().map(|s| s.kind);
+        let moving = self.peek_slot(from);
+        if moving.is_empty() {
+            return false;
+        }
+        if !to.role(kind).accepts(moving) {
+            self.log("that slot does not accept this item");
+            return false;
+        }
+        match (from, to) {
+            (SlotRef::Bag(a), SlotRef::Bag(b)) => {
+                self.swap(a, b);
+                true
+            }
+            (SlotRef::Bag(b), SlotRef::Station(s)) => self.transfer_station(b, s, true),
+            (SlotRef::Station(s), SlotRef::Bag(b)) => self.transfer_station(b, s, false),
+            (SlotRef::Station(_), SlotRef::Station(_)) => {
+                self.log("move through the bag first");
+                false
+            }
+        }
     }
 }

@@ -1,13 +1,30 @@
-use super::{ItemView, BAG_SLOTS, HOTBAR};
+//! Client-only HUD state.
+//!
+//! Authoritative stacks live in [`crate::items::ItemStore`]. This struct
+//! tracks which panel is up, the mouse-held stack (click-to-move), and the
+//! F3 debug flag. It does not persist — closing the bag returns a held
+//! stack to its origin.
 
-/// Client-only HUD state (which panel is up, bag cursor). Authoritative
-/// contents always come from [`super::ItemStore::view`].
+use super::{ItemStore, ItemView, SlotRef, Stack, BAG_SLOTS, HOTBAR};
+
+/// Pointer + panel state. Built on the client; never written to SpacetimeDB.
 #[derive(Clone, Debug, Default)]
 pub struct ItemUi {
+    /// Full bag / station panel is visible.
     pub bag_open: bool,
-    /// When true, arrow keys move through the open station instead of the bag.
+    /// Arrow keys walk the station grid instead of the bag.
     pub focus_station: bool,
     pub station_cursor: usize,
+    /// Stack currently riding the cursor (picked up with LMB).
+    pub held: Stack,
+    /// Slot the held stack came from — used to put it back on cancel.
+    pub origin: Option<SlotRef>,
+    /// Slot to hide while the stack is on the cursor (source still full on the server).
+    pub hide: Option<SlotRef>,
+    /// Last mouse position in HUD NDC (x −1..1 left→right, y −1..1 bottom→top).
+    pub mouse_ndc: (f32, f32),
+    /// F3 debug overlay.
+    pub debug: bool,
 }
 
 impl ItemUi {
@@ -26,6 +43,67 @@ impl ItemUi {
     pub fn on_station_closed(&mut self) {
         self.focus_station = false;
         self.station_cursor = 0;
+    }
+
+    /// Convert a window-pixel cursor into HUD NDC. `y` is flipped so +Y is up
+    /// (matches the overlay projection).
+    pub fn set_mouse_pixels(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        if width <= 1.0 || height <= 1.0 {
+            return;
+        }
+        self.mouse_ndc = ((x / width) * 2.0 - 1.0, 1.0 - (y / height) * 2.0);
+    }
+
+    /// LMB (`one = false`) picks up / places a whole stack. RMB places one.
+    ///
+    /// Takes the clicked [`SlotRef`] from HUD hit-testing, reads the live
+    /// store, and either lifts a stack onto `held` or commits [`ItemStore::move_between`].
+    pub fn click_slot(&mut self, store: &mut dyn ItemStore, slot: SlotRef, one: bool) {
+        if self.held.is_empty() {
+            let src = store.peek_slot(slot);
+            if src.is_empty() {
+                return;
+            }
+            self.held = if one {
+                Stack::new(src.item, 1)
+            } else {
+                src
+            };
+            self.origin = Some(slot);
+            self.hide = Some(slot);
+            store.select(match slot {
+                SlotRef::Bag(i) => i,
+                SlotRef::Station(_) => store.view().selected,
+            });
+            return;
+        }
+
+        let from = self.origin.unwrap_or(slot);
+        if store.move_between(from, slot, one) {
+            if one {
+                self.held.count = self.held.count.saturating_sub(1);
+                if self.held.count == 0 {
+                    self.clear_cursor();
+                }
+            } else {
+                self.clear_cursor();
+            }
+        }
+    }
+
+    pub fn clear_cursor(&mut self) {
+        self.held = Stack::empty();
+        self.origin = None;
+        self.hide = None;
+    }
+
+    /// Cancel a drag — the source slot is shown again.
+    pub fn cancel_drag(&mut self) {
+        self.clear_cursor();
+    }
+
+    pub fn hides(&self, slot: SlotRef) -> bool {
+        self.hide == Some(slot)
     }
 
     pub fn move_cursor(&mut self, view: &ItemView, dx: i32, dy: i32) {

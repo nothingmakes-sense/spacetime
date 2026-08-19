@@ -1,6 +1,6 @@
 use glam::{Mat4, Quat, Vec3};
 
-use crate::config::{JUMP_FORCE, MOUSE_SENSITIVITY, MOVE_SPEED, SPRINT_MULTIPLIER};
+use crate::config::{MOUSE_SENSITIVITY, MOVE_SPEED, SPRINT_MULTIPLIER};
 use crate::input::InputState;
 
 /// KayKit Adventurers face +Z in rest pose (cape on −Z, visor on +Z).
@@ -91,11 +91,7 @@ impl Player {
 
         self.velocity.x = wish.x * speed;
         self.velocity.z = wish.z * speed;
-
-        if input.jump && self.on_ground {
-            self.velocity.y = JUMP_FORCE;
-            self.on_ground = false;
-        }
+        // Vertical impulse lives in PhysicsWorld so hold-to-jump can cut/extend.
     }
 
     pub fn eye_position(&self) -> Vec3 {
@@ -103,11 +99,17 @@ impl Player {
     }
 
     /// Third-person chase camera, behind the mesh, looking at the torso.
-    pub fn chase_view_matrix(&self) -> (Mat4, Vec3) {
+    /// `pos` is the interpolated render position so the camera does not
+    /// quantize to the 60 Hz physics step (that was the walk stutter).
+    pub fn chase_view_at(&self, pos: Vec3) -> (Mat4, Vec3) {
         let forward = self.forward_xz();
-        let eye = self.position + Vec3::Y * 2.4 - forward * 5.0 + Vec3::Y * (-self.pitch * 1.2);
-        let target = self.position + Vec3::Y * 1.15;
+        let eye = pos + Vec3::Y * 2.4 - forward * 5.0 + Vec3::Y * (-self.pitch * 1.2);
+        let target = pos + Vec3::Y * 1.15;
         (Mat4::look_at_rh(eye, target, Vec3::Y), eye)
+    }
+
+    pub fn chase_view_matrix(&self) -> (Mat4, Vec3) {
+        self.chase_view_at(self.position)
     }
 
     pub fn model_matrix(&self) -> Mat4 {

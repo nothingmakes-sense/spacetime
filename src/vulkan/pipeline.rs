@@ -6,6 +6,8 @@ use crate::assets::Vertex;
 pub struct PipelineBundle {
     pub render_pass: vk::RenderPass,
     pub pipeline: vk::Pipeline,
+    /// Alpha-blended, depth-test off. HUD draws last so items sit on top.
+    pub overlay_pipeline: vk::Pipeline,
     pub layout: vk::PipelineLayout,
     pub global_set_layout: vk::DescriptorSetLayout,
     pub material_set_layout: vk::DescriptorSetLayout,
@@ -91,6 +93,24 @@ impl PipelineBundle {
             .blend_enable(false);
         let blend = vk::PipelineColorBlendStateCreateInfo::default()
             .attachments(std::slice::from_ref(&blend_att));
+
+        // Overlay: no depth so world geometry cannot hide the bar; src-alpha
+        // so white plates read as frosted glass.
+        let overlay_depth = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(false)
+            .depth_write_enable(false)
+            .depth_compare_op(vk::CompareOp::ALWAYS);
+        let overlay_blend_att = vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(true)
+            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .color_blend_op(vk::BlendOp::ADD)
+            .src_alpha_blend_factor(vk::BlendFactor::ONE)
+            .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .alpha_blend_op(vk::BlendOp::ADD);
+        let overlay_blend = vk::PipelineColorBlendStateCreateInfo::default()
+            .attachments(std::slice::from_ref(&overlay_blend_att));
         let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
         let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
 
@@ -107,9 +127,26 @@ impl PipelineBundle {
             .layout(layout)
             .render_pass(render_pass)
             .subpass(0);
+        let overlay_info = vk::GraphicsPipelineCreateInfo::default()
+            .stages(&stages)
+            .vertex_input_state(&vertex_input)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&raster)
+            .multisample_state(&msaa)
+            .depth_stencil_state(&overlay_depth)
+            .color_blend_state(&overlay_blend)
+            .dynamic_state(&dynamic)
+            .layout(layout)
+            .render_pass(render_pass)
+            .subpass(0);
 
         let pipelines = unsafe {
-            device.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+            device.create_graphics_pipelines(
+                vk::PipelineCache::null(),
+                &[pipeline_info, overlay_info],
+                None,
+            )
         }
         .map_err(|(_, e)| anyhow!("graphics pipeline: {e}"))?;
 
@@ -118,6 +155,7 @@ impl PipelineBundle {
         Ok(Self {
             render_pass,
             pipeline: pipelines[0],
+            overlay_pipeline: pipelines[1],
             layout,
             global_set_layout,
             material_set_layout,
@@ -126,6 +164,7 @@ impl PipelineBundle {
 
     pub unsafe fn destroy(&self, device: &Device) {
         device.destroy_pipeline(self.pipeline, None);
+        device.destroy_pipeline(self.overlay_pipeline, None);
         device.destroy_pipeline_layout(self.layout, None);
         device.destroy_descriptor_set_layout(self.global_set_layout, None);
         device.destroy_descriptor_set_layout(self.material_set_layout, None);

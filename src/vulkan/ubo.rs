@@ -23,6 +23,24 @@ impl CameraUbo {
             _pad: 0.0,
         }
     }
+
+    /// Screen-space overlay. HUD +Y is up, +X is right.
+    /// Vulkan NDC is Y-down, so `proj` flips Y. Depth is pinned near the camera
+    /// so the bar never z-fights the 3D scene.
+    pub fn overlay() -> Self {
+        let proj = Mat4::from_cols_array(&[
+            1.0, 0.0, 0.0, 0.0, //
+            0.0, -1.0, 0.0, 0.0, //
+            0.0, 0.0, 0.0, 0.0, //
+            0.0, 0.0, 0.02, 1.0,
+        ]);
+        Self {
+            view: Mat4::IDENTITY.to_cols_array_2d(),
+            proj: proj.to_cols_array_2d(),
+            camera_pos: [0.0, 0.0, 1.0],
+            _pad: 0.0,
+        }
+    }
 }
 
 #[repr(C)]
@@ -52,5 +70,9 @@ impl LightUbo {
             shininess,
             _pad: [0.0; 3],
         }
+    }
+
+    pub fn overlay() -> Self {
+        Self::new(Vec3::new(0.0, 0.4, 1.2), Vec3::ONE, 0.88, 0.08, 8.0)
     }
 }

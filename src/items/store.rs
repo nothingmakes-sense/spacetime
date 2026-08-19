@@ -6,8 +6,8 @@ use glam::Vec3;
 use super::{
     decode_slots, empty_bag, encode_slots, first_compatible, first_nonempty, insert_stack,
     recipe_by_id, recipes_for, step_furnace, take_inputs, take_one, CraftStation, ItemId, Recipe,
-    Stack, StationKind, BAG_SLOTS, DEFAULT_LOOT, DEFAULT_STATIONS, PICKUP_RANGE, STARTER_KIT,
-    STATION_RANGE,
+    SlotRole, Stack, StationKind, BAG_SLOTS, DEFAULT_LOOT, DEFAULT_STATIONS, PICKUP_RANGE,
+    STARTER_KIT, STATION_RANGE,
 };
 
 #[derive(Clone, Debug)]
@@ -54,6 +54,25 @@ impl ItemView {
     }
 }
 
+/// Address of one inventory cell. HUD hit-testing and click-to-move use this
+/// so bag and station slots share one code path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlotRef {
+    /// Player bag / hotbar index `0..BAG_SLOTS`.
+    Bag(usize),
+    /// Open station slot (chest or furnace).
+    Station(usize),
+}
+
+impl SlotRef {
+    pub fn role(self, station: Option<StationKind>) -> SlotRole {
+        match self {
+            Self::Bag(_) => SlotRole::Any,
+            Self::Station(i) => station.map(|k| k.slot_role(i)).unwrap_or(SlotRole::Any),
+        }
+    }
+}
+
 pub trait ItemStore {
     fn view(&self) -> ItemView;
     fn tick(&mut self, dt: f32);
@@ -69,6 +88,23 @@ pub trait ItemStore {
     fn toggle_station(&mut self, id: u64) -> bool;
     fn close_station(&mut self);
     fn give(&mut self, item: ItemId, count: u16) -> u16;
+
+    /// Read a slot from the current view (server cache or local bag).
+    fn peek_slot(&self, slot: SlotRef) -> Stack {
+        let v = self.view();
+        match slot {
+            SlotRef::Bag(i) => v.bag.get(i).copied().unwrap_or_else(Stack::empty),
+            SlotRef::Station(i) => v
+                .open_station_view()
+                .and_then(|s| s.slots.get(i).copied())
+                .unwrap_or_else(Stack::empty),
+        }
+    }
+
+    /// Move `from` → `to`. Whole stack, or a single item when `one` is set.
+    /// Rejects the write when the destination [`SlotRole`] does not accept the
+    /// payload (e.g. cobble in the furnace fuel slot).
+    fn move_between(&mut self, from: SlotRef, to: SlotRef, one: bool) -> bool;
 }
 
 pub struct LocalStore {
@@ -164,6 +200,45 @@ impl LocalStore {
 
     fn station_in_range(st: &StationView, pos: Vec3) -> bool {
         st.pos.distance(pos) <= STATION_RANGE
+    }
+
+    fn slot_get(&self, slot: SlotRef) -> Stack {
+        match slot {
+            SlotRef::Bag(i) => self.bag.get(i).copied().unwrap_or_else(Stack::empty),
+            SlotRef::Station(i) => self
+                .stations
+                .iter()
+                .find(|s| Some(s.id) == self.open_station)
+                .and_then(|s| s.slots.get(i).copied())
+                .unwrap_or_else(Stack::empty),
+        }
+    }
+
+    fn slot_set(&mut self, slot: SlotRef, stack: Stack) {
+        match slot {
+            SlotRef::Bag(i) => {
+                if let Some(s) = self.bag.get_mut(i) {
+                    *s = stack;
+                }
+            }
+            SlotRef::Station(i) => {
+                if let Some(st) = self
+                    .stations
+                    .iter_mut()
+                    .find(|s| Some(s.id) == self.open_station)
+                {
+                    if let Some(s) = st.slots.get_mut(i) {
+                        *s = stack;
+                    }
+                }
+            }
+        }
+    }
+
+    fn open_kind(&self) -> Option<StationKind> {
+        self.open_station
+            .and_then(|id| self.stations.iter().find(|s| s.id == id))
+            .map(|s| s.kind)
     }
 }
 
@@ -362,6 +437,53 @@ impl ItemStore for LocalStore {
 
     fn give(&mut self, item: ItemId, count: u16) -> u16 {
         insert_stack(&mut self.bag, Stack::new(item, count)).count
+    }
+
+    fn move_between(&mut self, from: SlotRef, to: SlotRef, one: bool) -> bool {
+        if from == to {
+            return true;
+        }
+        let mut src = self.slot_get(from);
+        if src.is_empty() {
+            return false;
+        }
+        let moving = if one {
+            Stack::new(src.item, 1)
+        } else {
+            src
+        };
+        let kind = self.open_kind();
+        if !to.role(kind).accepts(moving) {
+            self.log("that slot does not accept this item");
+            return false;
+        }
+        let mut dest = self.slot_get(to);
+        if dest.is_empty() || dest.item == moving.item {
+            let leftover = dest.absorb(moving);
+            if one {
+                src.count = src.count.saturating_sub(1);
+                if src.count == 0 {
+                    src = Stack::empty();
+                }
+                if !leftover.is_empty() {
+                    src.count += leftover.count;
+                }
+            } else if leftover.is_empty() {
+                src = Stack::empty();
+            } else {
+                src = leftover;
+            }
+            self.slot_set(to, dest);
+            self.slot_set(from, src);
+            true
+        } else if !one && from.role(kind).accepts(dest) {
+            self.slot_set(from, dest);
+            self.slot_set(to, moving);
+            true
+        } else {
+            self.log("cannot swap into that slot");
+            false
+        }
     }
 }
 

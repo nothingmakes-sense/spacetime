@@ -58,6 +58,9 @@ pub struct VulkanContext {
     global_sets: Vec<vk::DescriptorSet>,
     camera_ubos: Vec<AllocatedBuffer>,
     light_ubos: Vec<AllocatedBuffer>,
+    overlay_camera: AllocatedBuffer,
+    overlay_light: AllocatedBuffer,
+    overlay_set: vk::DescriptorSet,
     sampler: vk::Sampler,
 
     models: Vec<GpuModel>,
@@ -189,6 +192,54 @@ impl VulkanContext {
             unsafe { device.device.update_descriptor_sets(&writes, &[]) };
         }
 
+        let overlay_camera = memory::create_buffer(
+            &instance.instance,
+            &device.device,
+            device.physical,
+            std::mem::size_of::<CameraUbo>() as u64,
+            vk::BufferUsageFlags::UNIFORM_BUFFER,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+        let overlay_light = memory::create_buffer(
+            &instance.instance,
+            &device.device,
+            device.physical,
+            std::mem::size_of::<LightUbo>() as u64,
+            vk::BufferUsageFlags::UNIFORM_BUFFER,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+        memory::copy_to_buffer(&device.device, &overlay_camera, &[CameraUbo::overlay()]);
+        memory::copy_to_buffer(&device.device, &overlay_light, &[LightUbo::overlay()]);
+
+        let overlay_layouts = [pipeline.global_set_layout];
+        let overlay_alloc = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(descriptor_pool)
+            .set_layouts(&overlay_layouts);
+        let overlay_set = unsafe { device.device.allocate_descriptor_sets(&overlay_alloc)? }[0];
+        {
+            let cam_info = vk::DescriptorBufferInfo::default()
+                .buffer(overlay_camera.buffer)
+                .offset(0)
+                .range(std::mem::size_of::<CameraUbo>() as u64);
+            let light_info = vk::DescriptorBufferInfo::default()
+                .buffer(overlay_light.buffer)
+                .offset(0)
+                .range(std::mem::size_of::<LightUbo>() as u64);
+            let writes = [
+                vk::WriteDescriptorSet::default()
+                    .dst_set(overlay_set)
+                    .dst_binding(0)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .buffer_info(std::slice::from_ref(&cam_info)),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(overlay_set)
+                    .dst_binding(1)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .buffer_info(std::slice::from_ref(&light_info)),
+            ];
+            unsafe { device.device.update_descriptor_sets(&writes, &[]) };
+        }
+
         log::info!("Vulkan renderer ready");
         Ok(Self {
             window,
@@ -203,6 +254,9 @@ impl VulkanContext {
             global_sets,
             camera_ubos,
             light_ubos,
+            overlay_camera,
+            overlay_light,
+            overlay_set,
             sampler,
             models: Vec::new(),
             current_frame: 0,
@@ -466,6 +520,31 @@ impl VulkanContext {
         self.pending_light = LightUbo::new(pos, color, ambient, specular, shininess);
     }
 
+    /// Switch to the screen-space overlay: identity camera, no depth test,
+    /// alpha blend. Everything drawn after this is HUD and cannot be buried
+    /// by world geometry.
+    pub fn begin_overlay(&mut self) {
+        if self.skip_frame || self.recording_image.is_none() {
+            return;
+        }
+        let cmd = self.command_buffers[self.current_frame];
+        unsafe {
+            self.device.device.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline.overlay_pipeline,
+            );
+            self.device.device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline.layout,
+                0,
+                &[self.overlay_set],
+                &[],
+            );
+        }
+    }
+
     pub fn draw_model(&mut self, handle: ModelHandle, model: Mat4) -> Result<()> {
         if self.skip_frame {
             return Ok(());
@@ -618,6 +697,8 @@ impl Drop for VulkanContext {
             for b in &self.light_ubos {
                 memory::destroy_buffer(&self.device.device, b);
             }
+            memory::destroy_buffer(&self.device.device, &self.overlay_camera);
+            memory::destroy_buffer(&self.device.device, &self.overlay_light);
             self.device.device.destroy_sampler(self.sampler, None);
             self.device
                 .device
