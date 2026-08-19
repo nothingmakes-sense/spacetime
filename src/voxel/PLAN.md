@@ -72,7 +72,8 @@ authoritative module tiny.
 
 1. **Now** — materials table + `Chunk::from_height` + culled mesh + unit test.
 2. Upload one debug chunk behind the spawn when F3 is on (optional).
-3. Replace the flat ground plane with a ring of chunks around the player.
+3. Replace the flat ground plane with a ring of chunks around the player
+   (done — plane removed; collision is swept AABB vs voxels / props / actors).
 4. Dig / place with the pickaxe / held block, writing `VoxelEdit`.
 5. Greedy mesher + LOD for far chunks.
 
@@ -80,5 +81,4 @@ authoritative module tiny.
 
 * Trees, caves, biomes
 * Lighting / AO
-* Collision against voxel mesh (still using the y=0 plane)
 * Streaming from disk

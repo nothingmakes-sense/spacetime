@@ -1,6 +1,6 @@
 use glam::{Mat4, Quat, Vec3};
 
-use crate::config::{MOVE_SPEED, SPRINT_MULTIPLIER};
+use crate::config::{MOVE_SPEED, PITCH_LIMIT, SPRINT_MULTIPLIER};
 use crate::input::InputState;
 
 /// KayKit Adventurers face +Z in rest pose (cape on −Z, visor on +Z).
@@ -24,6 +24,17 @@ pub fn character_model_matrix(position: Vec3, yaw: f32) -> Mat4 {
     Mat4::from_rotation_translation(Quat::from_rotation_y(yaw + MESH_YAW_OFFSET), position)
 }
 
+/// Aim vector from yaw + pitch. Negative pitch looks down, +π/2 looks straight up.
+///
+/// **Takes:** heading (`yaw`) and elevation (`pitch`) from [`Player`].
+/// **Gives:** a unit world vector the chase camera and build-place ray share.
+/// **Source:** [`Player::apply_look`] (mouse deltas × sensitivity).
+/// **Goes to:** [`Player::chase_view_at`] and world RMB place.
+pub fn look_dir(yaw: f32, pitch: f32) -> Vec3 {
+    let cp = pitch.cos();
+    Vec3::new(-yaw.sin() * cp, pitch.sin(), -yaw.cos() * cp)
+}
+
 pub struct Player {
     pub position: Vec3,
     pub velocity: Vec3,
@@ -45,11 +56,19 @@ impl Player {
         }
     }
 
+    /// Apply a mouse delta to heading / elevation.
+    ///
+    /// **Takes:** raw device `dx`/`dy` and the sensitivity from
+    /// [`crate::settings::Settings::mouse_sensitivity`].
+    /// **Gives:** updated `yaw` (unbounded) and `pitch` clamped to
+    /// [`crate::config::PITCH_LIMIT`] so the player can look straight up
+    /// or straight down without flipping the camera.
+    /// **Goes to:** [`look_dir`] / [`Self::chase_view_at`].
     pub fn apply_look(&mut self, dx: f64, dy: f64, sensitivity: f32) {
         // Mouse right increases world-right heading (yaw decreases → toward +X at yaw 0).
         self.yaw -= dx as f32 * sensitivity;
         self.pitch -= dy as f32 * sensitivity;
-        self.pitch = self.pitch.clamp(-1.35, 0.35);
+        self.pitch = self.pitch.clamp(-PITCH_LIMIT, PITCH_LIMIT);
     }
 
     pub fn forward_xz(&self) -> Vec3 {
@@ -98,13 +117,17 @@ impl Player {
         self.position + Vec3::new(0.0, 1.6, 0.0)
     }
 
-    /// Third-person chase camera, behind the mesh, looking at the torso.
-    /// `pos` is the interpolated render position so the camera does not
-    /// quantize to the 60 Hz physics step (that was the walk stutter).
+    /// Third-person orbit camera.
+    ///
+    /// **Takes:** the render-interpolated feet `pos` (so the camera does not
+    /// quantize to the 60 Hz physics step) plus this player's yaw/pitch.
+    /// **Gives:** `(view_matrix, eye_world)` for the Vulkan camera UBO.
+    /// **Source:** [`Self::apply_look`] for orientation, [`crate::physics`]
+    /// for `pos`. **Goes to:** [`crate::app::App::render`].
     pub fn chase_view_at(&self, pos: Vec3) -> (Mat4, Vec3) {
-        let forward = self.forward_xz();
-        let eye = pos + Vec3::Y * 2.4 - forward * 5.0 + Vec3::Y * (-self.pitch * 1.2);
-        let target = pos + Vec3::Y * 1.15;
+        let target = pos + Vec3::Y * 1.4;
+        let dir = look_dir(self.yaw, self.pitch);
+        let eye = target - dir * 5.0;
         (Mat4::look_at_rh(eye, target, Vec3::Y), eye)
     }
 
@@ -145,5 +168,17 @@ mod tests {
         // Rest-pose +Z, rotated by π, must land on −Z (walk forward at yaw 0).
         let rotated = Quat::from_rotation_y(MESH_YAW_OFFSET) * Vec3::Z;
         assert!(rotated.z < -0.99 && rotated.x.abs() < 1e-5, "rotated={rotated}");
+    }
+
+    #[test]
+    fn pitch_reaches_straight_up_and_down() {
+        let mut p = Player::new(Vec3::ZERO);
+        p.apply_look(0.0, 10_000.0, 1.0);
+        assert!((p.pitch + PITCH_LIMIT).abs() < 1e-4, "down pitch={}", p.pitch);
+        assert!(look_dir(p.yaw, p.pitch).y < -0.99);
+
+        p.apply_look(0.0, -20_000.0, 1.0);
+        assert!((p.pitch - PITCH_LIMIT).abs() < 1e-4, "up pitch={}", p.pitch);
+        assert!(look_dir(p.yaw, p.pitch).y > 0.99);
     }
 }

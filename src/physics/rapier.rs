@@ -1,6 +1,8 @@
-//! Optional Rapier3D sketch. Not compiled — `PhysicsWorld` in `mod.rs`
-//! is the gameplay integration point. Wire this in when you want real
-//! rigid-body collision instead of the capsule-on-plane fallback.
+//! Optional Rapier3D sketch. Not compiled into the step — [`PhysicsWorld`]
+//! in `mod.rs` is the live path (swept AABB vs voxels / statics / actors).
+//! Keep this around if a future pass wants rigid-body debris.
+
+#![allow(dead_code, unused_variables)]
 
 #![allow(dead_code, unused_variables)]
 

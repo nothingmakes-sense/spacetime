@@ -160,16 +160,34 @@ impl LocalStore {
     }
 
     /// Starter kit + the default yard (chest, furnace, workbench, ground loot).
+    ///
+    /// Station/loot rows with `y == 0` are lifted onto [`crate::voxel::stand_y`]
+    /// so they sit on the voxel surface instead of the deleted test plane.
+    ///
+    /// **Takes:** [`DEFAULT_STATIONS`] / [`DEFAULT_LOOT`] / [`STARTER_KIT`].
+    /// **Gives:** a playable [`LocalStore`].
+    /// **Goes to:** [`crate::game_mode::GameMode::SinglePlayer`].
     pub fn with_default_world() -> Self {
         let mut s = Self::new();
         for (id, count) in STARTER_KIT {
             s.give(ItemId(*id), *count);
         }
         for (kind, x, y, z, rot) in DEFAULT_STATIONS {
-            s.spawn_station(*kind, Vec3::new(*x, *y, *z), *rot);
+            // y==0 was "on the test plane". Sit the yard on the voxel surface.
+            let gy = if *y == 0.0 {
+                crate::voxel::stand_y(*x, *z, crate::voxel::WORLD_SEED)
+            } else {
+                *y
+            };
+            s.spawn_station(*kind, Vec3::new(*x, gy, *z), *rot);
         }
         for (item, count, x, y, z) in DEFAULT_LOOT {
-            s.spawn_loot(Stack::new(ItemId(*item), *count), Vec3::new(*x, *y, *z));
+            let gy = if *y == 0.0 {
+                crate::voxel::stand_y(*x, *z, crate::voxel::WORLD_SEED)
+            } else {
+                *y
+            };
+            s.spawn_loot(Stack::new(ItemId(*item), *count), Vec3::new(*x, gy, *z));
         }
         s
     }

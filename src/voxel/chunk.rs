@@ -173,7 +173,12 @@ impl Chunk {
     }
 }
 
-/// Terrain height in voxel Y at world XZ. Used to sit the mesh on the physics plane.
+/// Terrain height in voxel Y at world XZ (the block the grass sits on).
+///
+/// **Takes:** world-integer XZ and the shared [`WORLD_SEED`].
+/// **Gives:** the Y index of the surface block.
+/// **Source:** value-noise heightfield (`height`).
+/// **Goes to:** [`crate::voxel::stand_y`], [`crate::voxel::solid_at`], mesher.
 pub fn surface_at(x: i32, z: i32, seed: u64) -> i32 {
     height(x, z, seed)
 }

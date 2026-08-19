@@ -21,7 +21,7 @@ use winit::{
 
 use crate::anim::AnimLibrary;
 use crate::assets::{
-    chest_parts, furnace_parts, ground_plane, material_lib, unit_box, workbench_model, AdventurerClass,
+    chest_parts, furnace_parts, material_lib, unit_box, workbench_model, AdventurerClass,
     AssetManager, ANIM_GENERAL, ANIM_MOVEMENT,
 };
 use crate::config::*;
@@ -35,12 +35,12 @@ use crate::items::{
 use crate::objects::{AttachedItem, CharacterObject, PropObject};
 use crate::pause::{pause_draws, PauseMenu, PausePage, PauseResult};
 use crate::physics::PhysicsWorld;
-use crate::player::{character_model_matrix, look_forward, Player};
+use crate::player::{character_model_matrix, look_dir, Player};
 use crate::rpg::SkillId;
-use crate::scene::{Object, Scene, TickCtx};
+use crate::scene::{Object, ObjectKind, Scene, TickCtx};
 use crate::settings::Settings;
 use crate::vulkan::VulkanContext;
-use crate::voxel::{surface_at, Chunk, CHUNK_SIZE, WORLD_SEED};
+use crate::voxel::{solid_at, stand_y, Chunk, CHUNK_SIZE, WORLD_SEED};
 use crate::module_bindings::PlayerTableAccess;
 use spacetimedb_sdk::Table;
 
@@ -60,6 +60,9 @@ pub struct App {
     world_sync: WorldSync,
     settings: Settings,
     pause: PauseMenu,
+    /// Loaded voxel chunks. Meshes go in `voxel_draws`; occupancy is queried
+    /// by physics via [`solid_at`].
+    chunks: Vec<Chunk>,
     voxel_draws: Vec<(crate::vulkan::ModelHandle, glam::Mat4)>,
     exit_requested: bool,
 
@@ -67,7 +70,6 @@ pub struct App {
     accumulator: f32,
     fps: f32,
 
-    ground: Option<crate::vulkan::ModelHandle>,
     remote_mesh: Option<crate::vulkan::ModelHandle>,
 }
 
@@ -79,7 +81,7 @@ impl App {
             assets: AssetManager::new(),
             physics: PhysicsWorld::new(GRAVITY),
             mode,
-            player: Player::new(Vec3::new(0.0, 0.0, 6.0)),
+            player: Player::new(Vec3::new(0.5, stand_y(0.5, 6.0, WORLD_SEED), 6.0)),
             input: InputState::default(),
             anim_lib: AnimLibrary::new(),
             scene: Scene::new(),
@@ -88,12 +90,12 @@ impl App {
             world_sync: WorldSync::new(),
             settings: Settings::load(),
             pause: PauseMenu::default(),
+            chunks: Vec::new(),
             voxel_draws: Vec::new(),
             exit_requested: false,
             last_frame: Instant::now(),
             accumulator: 0.0,
             fps: 60.0,
-            ground: None,
             remote_mesh: None,
         })
     }
@@ -162,9 +164,7 @@ impl App {
         info!("animation library: {} clips", self.anim_lib.len());
 
         let mats = material_lib::MatCache::load();
-        let grass = mats.or_solid("grass", [0x4a, 0x6b, 0x3a, 0xff]);
-        // Wide skirt under the voxel ring so the horizon is not a void.
-        self.ground = Some(vulkan.upload_model(&material_lib::textured_ground(80.0, 40.0, grass))?);
+        // Test-plane ground is gone — terrain is the voxel ring below.
 
         let wood_px = mats.or_solid("wood", [0x8a, 0x5a, 0x2b, 0xff]);
         let brick_px = mats.or_solid("brick", [0x8a, 0x3a, 0x28, 0xff]);
@@ -209,7 +209,7 @@ impl App {
             thatch,
             "workbench",
         ))?;
-        let _ = (chest_parts, ground_plane, unit_box, workbench_model);
+        let _ = (chest_parts, unit_box, workbench_model);
 
         self.item_meshes = Some(ItemMeshes::upload(
             &mut vulkan,
@@ -221,25 +221,37 @@ impl App {
             &mats,
         )?);
 
-        let surface = surface_at(0, 0, WORLD_SEED) as f32;
-        for cz in -1..=1 {
-            for cx in -1..=1 {
-                let chunk = Chunk::from_height(IVec3::new(cx, 0, cz), WORLD_SEED);
-                let model = chunk.mesh_textured(|b| mats.block(b).cloned());
-                match vulkan.upload_model(&model) {
-                    Ok(h) => {
-                        let t = Mat4::from_translation(Vec3::new(
-                            cx as f32 * CHUNK_SIZE as f32,
-                            -surface,
-                            cz as f32 * CHUNK_SIZE as f32,
-                        ));
-                        self.voxel_draws.push((h, t));
+        // Load a walkable ring of chunks at their true world Y (no -surface
+        // offset — that existed only to sit the mesh on the deleted y=0 plane).
+        //
+        // **Takes:** `WORLD_SEED` + Material-LIB albedos.
+        // **Gives:** `self.chunks` for [`solid_at`] and `self.voxel_draws` for Vulkan.
+        // **Goes to:** physics occupancy and the terrain pass in `render`.
+        self.chunks.clear();
+        for cy in 0..=1 {
+            for cz in -2..=2 {
+                for cx in -2..=2 {
+                    let chunk = Chunk::from_height(IVec3::new(cx, cy, cz), WORLD_SEED);
+                    let model = chunk.mesh_textured(|b| mats.block(b).cloned());
+                    match vulkan.upload_model(&model) {
+                        Ok(h) => {
+                            let t = Mat4::from_translation(Vec3::new(
+                                cx as f32 * CHUNK_SIZE as f32,
+                                cy as f32 * CHUNK_SIZE as f32,
+                                cz as f32 * CHUNK_SIZE as f32,
+                            ));
+                            self.voxel_draws.push((h, t));
+                            self.chunks.push(chunk);
+                        }
+                        Err(e) => warn!("voxel chunk ({cx},{cy},{cz}): {e:#}"),
                     }
-                    Err(e) => warn!("voxel chunk ({cx},{cz}): {e:#}"),
                 }
             }
         }
-        info!("voxel terrain: {} chunks (Material-LIB albedo)", self.voxel_draws.len());
+        info!(
+            "voxel terrain: {} chunks at world Y (Material-LIB albedo)",
+            self.voxel_draws.len()
+        );
 
         self.spawn_character(
             &mut vulkan,
@@ -250,12 +262,13 @@ impl App {
         )?;
 
         let npc_spawns = [
-            (AdventurerClass::Mage, Vec3::new(-6.0, 0.0, -4.0), 0.6),
-            (AdventurerClass::Ranger, Vec3::new(6.0, 0.0, -4.0), -0.6),
-            (AdventurerClass::Barbarian, Vec3::new(0.0, 0.0, -8.0), 3.14),
-            (AdventurerClass::Rogue, Vec3::new(4.0, 0.0, 2.0), 2.2),
+            (AdventurerClass::Mage, -6.0, -4.0, 0.6),
+            (AdventurerClass::Ranger, 6.0, -4.0, -0.6),
+            (AdventurerClass::Barbarian, 0.0, -8.0, 3.14),
+            (AdventurerClass::Rogue, 4.0, 2.0, 2.2),
         ];
-        for (class, pos, yaw) in npc_spawns {
+        for (class, x, z, yaw) in npc_spawns {
+            let pos = Vec3::new(x, stand_y(x, z, WORLD_SEED), z);
             if let Err(e) = self.spawn_character(&mut vulkan, class, pos, yaw, false) {
                 warn!("NPC {}: {e:#}", class.display_name());
             }
@@ -263,20 +276,27 @@ impl App {
 
         if let GameMode::SinglePlayer { world, .. } = &self.mode {
             for ent in &world.entities {
+                let feet = stand_y(ent.position.x, ent.position.z, WORLD_SEED);
+                let pos = Vec3::new(ent.position.x, feet + ent.half_extents.y, ent.position.z);
                 let id = self.scene.alloc_id();
                 let mut obj = Object::new(id, "crate", crate::scene::ObjectKind::Prop)
-                    .with_translation(ent.position - Vec3::new(0.0, ent.half_extents.y, 0.0));
+                    .with_translation(pos - Vec3::new(0.0, ent.half_extents.y, 0.0));
                 obj.transform.scale = ent.half_extents * 2.0;
                 self.scene.spawn(Box::new(PropObject::new(obj, crate_mesh)));
-                self.physics.add_static_box(ent.position, ent.half_extents);
+                self.physics.add_static_box(pos, ent.half_extents);
             }
             info!("Single-player world ready ({} props)", world.entities.len());
         }
 
         for (kind, x, y, z, _) in crate::items::DEFAULT_STATIONS {
             let (hx, hy, hz) = kind.half_extents();
+            let gy = if *y == 0.0 {
+                stand_y(*x, *z, WORLD_SEED)
+            } else {
+                *y
+            };
             self.physics
-                .add_static_box(Vec3::new(*x, *y + hy, *z), Vec3::new(hx, hy, hz));
+                .add_static_box(Vec3::new(*x, gy + hy, *z), Vec3::new(hx, hy, hz));
         }
 
         {
@@ -286,7 +306,6 @@ impl App {
             }
         }
 
-        self.physics.create_ground();
         self.physics.create_player_capsule(self.player.position);
         self.vulkan = Some(vulkan);
 
@@ -488,9 +507,13 @@ impl App {
             if sel.item.is_food() {
                 self.mode.items().consume_selected();
             } else if sel.item.def().place != 0 {
-                let dir = look_forward(yaw);
-                let p = pos + dir * 2.2;
-                self.mode.items().place_build(Vec3::new(p.x, 0.0, p.z));
+                // Snap the block to the surface under the aim point.
+                let dir = look_dir(yaw, self.player.pitch);
+                let p = pos + Vec3::Y * 1.2 + dir * 2.6;
+                let gx = p.x.floor() + 0.5;
+                let gz = p.z.floor() + 0.5;
+                let gy = stand_y(gx, gz, WORLD_SEED);
+                self.mode.items().place_build(Vec3::new(gx, gy, gz));
             }
         }
 
@@ -526,21 +549,89 @@ impl App {
 
     /// Kinematic step. Called every render frame with the real `dt` so the
     /// body and chase camera advance together (no 60 Hz pose snap).
+    ///
+    /// **Takes:** frame `dt`, current input (via `player.update_movement`),
+    /// hero DEX speed, live item/scene/remote positions, and `self.chunks`.
+    /// **Gives:** updated `player.position` / `on_ground` / vertical velocity.
+    /// **Goes to:** character `sync_local` and the chase camera.
     fn drive_player(&mut self, dt: f32) {
         self.player.update_movement(&self.input, dt);
         let spd = self.mode.items().view().hero.speed_mult();
         self.player.velocity.x *= spd;
         self.player.velocity.z *= spd;
+        self.rebuild_colliders();
         self.physics.set_wish_horizontal(
             self.player.velocity.x,
             self.player.velocity.z,
             self.input.jump && !self.player.sitting,
         );
-        self.physics.step(dt);
+        let chunks = &self.chunks;
+        self.physics
+            .step(dt, |x, y, z| solid_at(chunks, WORLD_SEED, x, y, z));
         if let Some((pos, on_ground)) = self.physics.player_transform() {
             self.player.position = pos;
             self.player.on_ground = on_ground;
             self.player.velocity.y = self.physics.player_velocity().y;
+        }
+    }
+
+    /// Rebuild static + actor colliders from the live world.
+    ///
+    /// **Takes:** [`ItemView`] stations / builds / loot, single-player crates
+    /// already registered at init, scene characters (NPCs), and remote
+    /// multiplayer players.
+    /// **Gives:** a fresh collider list on [`PhysicsWorld`].
+    /// **Source:** `mode.items().view()`, `scene.nodes`, `remote_players`.
+    /// **Goes to:** [`PhysicsWorld::step`] this frame.
+    fn rebuild_colliders(&mut self) {
+        self.physics.clear_colliders();
+        let view = self.mode.items().view();
+        for st in &view.stations {
+            let (hx, hy, hz) = st.kind.half_extents();
+            self.physics
+                .add_static_box(st.pos + Vec3::Y * hy, Vec3::new(hx, hy, hz));
+        }
+        for piece in &view.builds {
+            // `textured_box` origin is bottom-centre — collider centre is +0.5 Y.
+            self.physics
+                .add_static_box(piece.pos + Vec3::Y * 0.5, Vec3::splat(0.5));
+        }
+        for loot in &view.loot {
+            self.physics
+                .add_static_box(loot.pos + Vec3::Y * 0.16, Vec3::splat(0.18));
+        }
+        drop(view);
+
+        if let GameMode::SinglePlayer { world, .. } = &self.mode {
+            for ent in &world.entities {
+                let feet = stand_y(ent.position.x, ent.position.z, WORLD_SEED);
+                let center = Vec3::new(ent.position.x, feet + ent.half_extents.y, ent.position.z);
+                self.physics.add_static_box(center, ent.half_extents);
+            }
+        }
+
+        let local = self.player.position;
+        for n in &self.scene.nodes {
+            let b = n.base();
+            if b.kind != ObjectKind::Character {
+                continue;
+            }
+            let p = b.transform.translation;
+            if p.distance(local) < 0.4 {
+                continue;
+            }
+            self.physics
+                .add_actor_capsule(p, PLAYER_RADIUS, PLAYER_HEIGHT);
+        }
+
+        if let GameMode::Multiplayer { remote_players, .. } = &self.mode {
+            for rp in remote_players {
+                if rp.position.distance(local) < 0.4 {
+                    continue;
+                }
+                self.physics
+                    .add_actor_capsule(rp.position, PLAYER_RADIUS, PLAYER_HEIGHT);
+            }
         }
     }
 
@@ -672,9 +763,6 @@ impl App {
             shine,
         );
 
-        if let Some(g) = self.ground {
-            vk.draw_model(g, Mat4::from_translation(Vec3::new(0.0, -0.04, 0.0)))?;
-        }
         for &(handle, model) in &self.voxel_draws {
             vk.draw_model(handle, model)?;
         }
